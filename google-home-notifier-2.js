@@ -6,9 +6,9 @@ const Client = require('castv2-client').Client
 const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver
 const mdns = require('mdns')
 const browser = mdns.createBrowser(mdns.tcp('googlecast'))
-const fs = require('fs') 
-const textToSpeech = require('@google-cloud/text-to-speech') 
-const client = new textToSpeech.TextToSpeechClient() 
+const fs = require('fs')
+const textToSpeech = require('@google-cloud/text-to-speech')
+const client = new textToSpeech.TextToSpeechClient()
 
 var audioFilePath
 var deviceAddress
@@ -66,18 +66,18 @@ const getSpeechUrl = (text, host, callback) => {
     },
     audioConfig: {audioEncoding: 'MP3'}
   }
-   
+
   client.synthesizeSpeech(request, (err, response) => {
     if (err) {
       console.error('ERROR:', err)
       return
     }
-   
+
     fs.writeFile(audioFilePath, response.audioContent, 'binary', err => {
       if (err) {
         console.error('ERROR:', err)
         return
-      } 
+      }
       onDeviceUp(host, ngrokUrl, (res) => {
         callback(res)
       })
@@ -85,7 +85,7 @@ const getSpeechUrl = (text, host, callback) => {
   })
 }
 
-const getPlayUrl = (url, host, callback) => 
+const getPlayUrl = (url, host, callback) =>
   onDeviceUp(host, url, (res) => {
     callback(res)
   })

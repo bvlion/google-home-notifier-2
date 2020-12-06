@@ -2,7 +2,7 @@ const express = require('express')
 const googlehome = require(__dirname + '/google-home-notifier-2')
 const ngrok = require('ngrok')
 const bodyParser = require('body-parser')
-const fs = require('fs') 
+const fs = require('fs')
 const app = express()
 
 const urlencodedParser = bodyParser.urlencoded({ extended: false })
@@ -18,7 +18,7 @@ const ip = '192.168.11.100'
 app.get(mp3Url, (_, res) =>
   fs.readFile(mp3OutputPath, (_, data) =>
     res.status(200).send(new Buffer.from(data, 'binary'))
-  )    
+  )
 )
 
 app.post(notifyUrl, urlencodedParser, (req, res) => {

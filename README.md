@@ -50,3 +50,16 @@ $ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/dir/target.json
 ``` sh
 $ node sample.js
 ```
+
+## エラー対応
+
+#### `Error: Could not load the default credentials. Browse to https://cloud.google.com/docs/authentication/getting-started for more information.`
+
+google-home-notifier-2.js の 10行目を次のように書き換え、json ファイルを読み込ませます。
+
+```
+const config = {
+  keyFilename: '/path/to/dir/target.json'
+}
+const client = new textToSpeech.TextToSpeechClient(config)
+```

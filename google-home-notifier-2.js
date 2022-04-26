@@ -64,7 +64,10 @@ const getSpeechUrl = (text, host, callback) => {
       languageCode: language,
       name: voiceName
     },
-    audioConfig: {audioEncoding: 'MP3'}
+    audioConfig: {
+      audioEncoding: 'MP3',
+      speakingRate: '0.8'
+    }
   }
    
   client.synthesizeSpeech(request, (err, response) => {

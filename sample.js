@@ -1,6 +1,6 @@
 const express = require('express')
 const googlehome = require(__dirname + '/google-home-notifier-2')
-const ngrok = require('ngrok')
+const ngrok = require("@ngrok/ngrok")
 const bodyParser = require('body-parser')
 const fs = require('fs')
 const app = express()
@@ -61,7 +61,8 @@ app.post(notifyUrl, urlencodedParser, (req, res) => {
 
 app.listen(serverPort, () => {
   (async () => {
-    const url = await ngrok.connect({addr: serverPort})
+    const listener = await ngrok.forward({ addr: serverPort, authtoken_from_env: true })
+    const url = listener.url()
     console.log('ngrok Endpoints:' + url)
     console.log('POST example:')
     console.log('curl -X POST -d "text=こんにちは" http://localhost:' + serverPort + notifyUrl)

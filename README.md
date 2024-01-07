@@ -31,6 +31,20 @@ $ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/dir/target.json
 
 [Google ドキュメント](https://cloud.google.com/text-to-speech/docs/quickstart-client-libraries)
 
+### Ngrok
+
+Ngrok で [auth key](https://dashboard.ngrok.com/get-started/your-authtoken) を発行後、環境変数 `NGROK_AUTHTOKEN` を設定します。
+
+``` sh
+$ export NGROK_AUTHTOKEN=${発行されたキー}
+```
+
+sample.js の 64 行目を以下のように変える方法でも可能です。
+
+``` js
+const listener = await ngrok.forward({ addr: serverPort, authtoken: '${発行されたキー}' })
+```
+
 ### sample.js を修正
 
 以下を環境に合わせて設定します。

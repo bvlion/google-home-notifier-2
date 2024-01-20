@@ -1,8 +1,9 @@
-const express = require('express')
-const googlehome = require(__dirname + '/google-home-notifier-2')
+const path = require('path')
+const googlehome = require(path.join(__dirname, '..', '/google-home-notifier-2'))
 const ngrok = require("@ngrok/ngrok")
 const bodyParser = require('body-parser')
 const fs = require('fs')
+const express = require('express')
 const app = express()
 
 const urlencodedParser = bodyParser.urlencoded({ extended: false })
@@ -14,6 +15,7 @@ const mp3Url = '/text-mp3'
 const notifyUrl = '/google-home-notifier'
 const mp3OutputPath = 'sample.mp3'
 const ip = '192.168.11.100'
+const ngrokToken = 'token'
 
 app.get(mp3Url, (_, res) =>
   fs.readFile(mp3OutputPath, (_, data) =>
@@ -61,7 +63,7 @@ app.post(notifyUrl, urlencodedParser, (req, res) => {
 
 app.listen(serverPort, () => {
   (async () => {
-    const listener = await ngrok.forward({ addr: serverPort, authtoken_from_env: true })
+    const listener = await ngrok.forward({ addr: serverPort, authtoken: ngrokToken })
     const url = listener.url()
     console.log('ngrok Endpoints:' + url)
     console.log('POST example:')

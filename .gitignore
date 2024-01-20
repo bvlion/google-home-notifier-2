@@ -1,2 +1,4 @@
 node_modules
 *.mp3
+script/*
+!script/.gitkeep

@@ -8,7 +8,10 @@ const mdns = require('mdns')
 const browser = mdns.createBrowser(mdns.tcp('googlecast'))
 const fs = require('fs')
 const textToSpeech = require('@google-cloud/text-to-speech')
-const client = new textToSpeech.TextToSpeechClient()
+const config = {
+  keyFilename: __dirname + '/script/target.json'
+}
+const client = new textToSpeech.TextToSpeechClient(config)
 
 var audioFilePath
 var deviceAddress

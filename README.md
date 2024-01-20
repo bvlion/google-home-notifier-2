@@ -2,7 +2,17 @@
 
 [google-home-notifier](https://github.com/noelportugal/google-home-notifier) の `google-tts-api` を `@google-cloud/text-to-speech` に変更したもので、Google Home に音声ファイルを再生させます。
 
-## インストール
+## セットアップ
+
+### node や依存ライブラリ
+
+```
+$ sudo apt-get install -y git-core libnss-mdns libavahi-compat-libdnssd-dev
+$ curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+$ sudo apt-get install -y nodejs
+```
+
+### インストール
 
 ``` sh
 $ git clone https://github.com/bvlion/google-home-notifier-2
@@ -10,44 +20,23 @@ $ cd google-home-notifier-2
 $ npm install
 ```
 
-## セットアップ
-
-### node や依存ライブラリ
-
-```
-$ sudo apt-get install -y nodejs npm git-core libnss-mdns libavahi-compat-libdnssd-dev
-$ sudo npm cache clean
-$ sudo npm install npm n -g
-$ sudo n lts
-```
-
 ### Text-to-Speech
 
-Cloud Text-to-Speech API を有効にし、サービスアカウントキーを発行後、環境変数 `GOOGLE_APPLICATION_CREDENTIALS` を設定します。
+1. Cloud Text-to-Speech API を有効にしサービスアカウントキーを発行
+1. json をダウンロードして `target.json` にファイル名を変更
+1. script フォルダに配置
 
-``` sh
-$ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/dir/target.json
-```
-
-[Google ドキュメント](https://cloud.google.com/text-to-speech/docs/quickstart-client-libraries)
+> [!TIP]
+> [Google ドキュメント](https://cloud.google.com/text-to-speech/docs/quickstart-client-libraries)
 
 ### Ngrok
 
-Ngrok で [auth key](https://dashboard.ngrok.com/get-started/your-authtoken) を発行後、環境変数 `NGROK_AUTHTOKEN` を設定します。
+Ngrok で [auth key](https://dashboard.ngrok.com/get-started/your-authtoken) を発行します。
 
-``` sh
-$ export NGROK_AUTHTOKEN=${発行されたキー}
-```
-
-sample.js の 64 行目を以下のように変える方法でも可能です。
-
-``` js
-const listener = await ngrok.forward({ addr: serverPort, authtoken: '${発行されたキー}' })
-```
 
 ### sample.js を修正
 
-以下を環境に合わせて設定します。
+main.js を script フォルダにコピーして、以下を環境に合わせて設定します。（必要に応じてご自身のコードを git 管理いただけます）
 
 - const serverPort = 8091
 - const language = 'ja-JP'
@@ -56,24 +45,36 @@ const listener = await ngrok.forward({ addr: serverPort, authtoken: '${発行さ
 - const notifyUrl = '/google-home-notifier'
 - const mp3OutputPath = 'sample.mp3'
 - const ip = '192.168.11.100'
+- const ngrokToken = 'token'
 
-[音声の参考](https://cloud.google.com/text-to-speech/docs/voices)
+> [!TIP]
+> [音声の参考](https://cloud.google.com/text-to-speech/docs/voices)
 
 ## 実行
 
 ``` sh
-$ node sample.js
+$ node script/main.js
 ```
 
-## エラー対応
+## systemctl
 
-#### `Error: Could not load the default credentials. Browse to https://cloud.google.com/docs/authentication/getting-started for more information.`
-
-google-home-notifier-2.js の 10行目を次のように書き換え、json ファイルを読み込ませます。
+service に登録する場合は `/etc/systemd/system` に service ファイルを作ると利用できます。
+以下は参考です。
 
 ```
-const config = {
-  keyFilename: '/path/to/dir/target.json'
-}
-const client = new textToSpeech.TextToSpeechClient(config)
+[Unit]
+Description=google-home-notifier Server
+After=syslog.target network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/node script/main.js
+Restart=on-failure
+RestartSec=10
+KillMode=process
+WorkingDirectory=/home/pi/google-home-notifier
+
+[Install]
+WantedBy=multi-user.target
 ```

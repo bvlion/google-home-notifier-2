@@ -16,7 +16,7 @@
   "dependencies": {
     "@google-cloud/text-to-speech": "5.6.0",
     "@ngrok/ngrok": "^1.2.0",
-    "body-parser": "^1.20.2",
+    "body-parser": "^1.20.3",
     "castv2-client": "^1.2.0",
     "express": "^4.19.2",
     "mdns": "^2.7.2"

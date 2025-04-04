@@ -1,6 +1,7 @@
-// Copyright（c）2017 noelportugal
-// Released under the MIT licens
-// https://github.com/noelportugal/google-home-notifier/blob/master/LICENSE
+// Based on: https://github.com/noelportugal/google-home-notifier
+// Original work Copyright (c) 2017 noelportugal
+// Modified by bvlion
+// Released under the MIT License
 
 const Client = require('castv2-client').Client
 const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver

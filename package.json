@@ -15,7 +15,7 @@
   "license": "MIT",
   "dependencies": {
     "@google-cloud/text-to-speech": "6.0.1",
-    "@ngrok/ngrok": "^1.5.0",
+    "@ngrok/ngrok": "^1.6.0",
     "body-parser": "^2.2.0",
     "castv2-client": "^1.2.0",
     "express": "^5.1.0",

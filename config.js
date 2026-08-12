@@ -5,6 +5,7 @@
 // 実値のデフォルトを持たせず必須値として扱う。
 
 const DEFAULT_SERVER_PORT = 8091
+const MAX_TCP_PORT = 65535
 const DEFAULT_TTS_LANGUAGE = 'ja-JP'
 const DEFAULT_TTS_VOICE = 'ja-JP-Standard-A'
 const DEFAULT_MP3_URL_PATH = '/text-mp3'
@@ -24,8 +25,8 @@ const resolveServerPort = (env) => {
     return DEFAULT_SERVER_PORT
   }
   const port = Number(env.SERVER_PORT)
-  if (!Number.isInteger(port) || port <= 0) {
-    throw new Error('環境変数 SERVER_PORT には正の整数を設定してください。')
+  if (!Number.isInteger(port) || port < 1 || port > MAX_TCP_PORT) {
+    throw new Error(`環境変数 SERVER_PORT には 1〜${MAX_TCP_PORT} の整数を設定してください。`)
   }
   return port
 }

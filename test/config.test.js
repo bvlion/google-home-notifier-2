@@ -58,11 +58,22 @@ describe('loadConfig()', () => {
 
   test('SERVER_PORT が数値でない場合はエラーになる', () => {
     expect(() => loadConfig({ ...requiredEnv, SERVER_PORT: 'abc' }))
-      .toThrow('環境変数 SERVER_PORT には正の整数を設定してください。')
+      .toThrow('環境変数 SERVER_PORT には 1〜65535 の整数を設定してください。')
   })
 
   test('SERVER_PORT が 0 以下の場合はエラーになる', () => {
     expect(() => loadConfig({ ...requiredEnv, SERVER_PORT: '0' }))
-      .toThrow('環境変数 SERVER_PORT には正の整数を設定してください。')
+      .toThrow('環境変数 SERVER_PORT には 1〜65535 の整数を設定してください。')
+  })
+
+  test('SERVER_PORT が TCPポートの上限(65535)の場合は有効な値として扱われる', () => {
+    const config = loadConfig({ ...requiredEnv, SERVER_PORT: '65535' })
+
+    expect(config.serverPort).toBe(65535)
+  })
+
+  test('SERVER_PORT が TCPポートの上限(65535)を超える場合はエラーになる', () => {
+    expect(() => loadConfig({ ...requiredEnv, SERVER_PORT: '65536' }))
+      .toThrow('環境変数 SERVER_PORT には 1〜65535 の整数を設定してください。')
   })
 })

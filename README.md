@@ -51,6 +51,7 @@ $ cp .env.example .env
 | --- | --- |
 | `GOOGLE_HOME_IP` | Google Home のIPアドレス |
 | `NGROK_AUTHTOKEN` | ngrok の authtoken |
+| `NOTIFY_AUTH_TOKEN` | 通知用POSTエンドポイントの認証に使う共有シークレット（後述） |
 
 #### 任意（省略時はデフォルト値を使用）
 
@@ -77,6 +78,26 @@ $ npm start
 # または
 $ node main.js
 ```
+
+## 通知用エンドポイントの認証
+
+ngrok 等でこのサーバーを外部公開すると、通知用エンドポイントのURLを知る第三者が任意の通知を実行できてしまいます。これを防ぐため、通知を受け付けるPOSTエンドポイント（`NOTIFY_URL_PATH`）は、`NOTIFY_AUTH_TOKEN` に設定した値による Bearer Token 認証を必須とします。
+
+- `NOTIFY_AUTH_TOKEN` はデフォルト値を持たない必須設定です。未設定のままではサーバーを起動できません（安全側に倒れるデフォルト）。
+- リクエストには `Authorization: Bearer <NOTIFY_AUTH_TOKENの値>` ヘッダーを付与してください。
+- ヘッダーがない、Bearer形式でない、値が不正な場合はいずれも `401` を返し、通知処理は実行されません。
+
+``` sh
+$ curl -X POST \
+  -H "Authorization: Bearer $NOTIFY_AUTH_TOKEN" \
+  -d "text=こんにちは" \
+  http://localhost:8091/google-home-notifier
+```
+
+> [!WARNING]
+> ngrok 等で外部公開する場合、`NOTIFY_AUTH_TOKEN` を設定せずに通知用POSTエンドポイントを公開しないでください。第三者が無認証で通知を実行できてしまいます。
+
+一方、生成したMP3を配信するGETエンドポイント（`MP3_URL_PATH`）はGoogle Homeデバイス自身がngrok URL経由で直接取得するものであり、デバイス側からAuthorizationヘッダーを付与できません。そのため、このGETエンドポイントは今回の認証対象外です。
 
 ## systemctl
 

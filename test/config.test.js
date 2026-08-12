@@ -5,7 +5,8 @@ const { loadConfig } = require('../config')
 describe('loadConfig()', () => {
   const requiredEnv = {
     GOOGLE_HOME_IP: '192.168.11.100',
-    NGROK_AUTHTOKEN: 'test-token'
+    NGROK_AUTHTOKEN: 'test-token',
+    NOTIFY_AUTH_TOKEN: 'test-notify-auth-token'
   }
 
   test('必須の環境変数のみを指定した場合、その他の値は既存挙動と同じデフォルト値になる', () => {
@@ -19,7 +20,8 @@ describe('loadConfig()', () => {
       notifyUrl: '/google-home-notifier',
       mp3OutputPath: 'sample.mp3',
       googleHomeIp: '192.168.11.100',
-      ngrokAuthtoken: 'test-token'
+      ngrokAuthtoken: 'test-token',
+      notifyAuthToken: 'test-notify-auth-token'
     })
   })
 
@@ -42,18 +44,24 @@ describe('loadConfig()', () => {
       notifyUrl: '/notify',
       mp3OutputPath: '/tmp/out.mp3',
       googleHomeIp: '192.168.11.100',
-      ngrokAuthtoken: 'test-token'
+      ngrokAuthtoken: 'test-token',
+      notifyAuthToken: 'test-notify-auth-token'
     })
   })
 
   test('GOOGLE_HOME_IP が未設定の場合はエラーになる', () => {
-    expect(() => loadConfig({ NGROK_AUTHTOKEN: 'test-token' }))
+    expect(() => loadConfig({ NGROK_AUTHTOKEN: 'test-token', NOTIFY_AUTH_TOKEN: 'test-notify-auth-token' }))
       .toThrow('環境変数 GOOGLE_HOME_IP を設定してください。')
   })
 
   test('NGROK_AUTHTOKEN が未設定の場合はエラーになる', () => {
-    expect(() => loadConfig({ GOOGLE_HOME_IP: '192.168.11.100' }))
+    expect(() => loadConfig({ GOOGLE_HOME_IP: '192.168.11.100', NOTIFY_AUTH_TOKEN: 'test-notify-auth-token' }))
       .toThrow('環境変数 NGROK_AUTHTOKEN を設定してください。')
+  })
+
+  test('NOTIFY_AUTH_TOKEN が未設定の場合はエラーになる', () => {
+    expect(() => loadConfig({ GOOGLE_HOME_IP: '192.168.11.100', NGROK_AUTHTOKEN: 'test-token' }))
+      .toThrow('環境変数 NOTIFY_AUTH_TOKEN を設定してください。')
   })
 
   test('SERVER_PORT が数値でない場合はエラーになる', () => {

@@ -1,5 +1,6 @@
 const googlehome = require('./google-home-notifier-2')
 const { loadConfig } = require('./config')
+const { requireBearerToken } = require('./auth')
 const ngrok = require("@ngrok/ngrok")
 const bodyParser = require('body-parser')
 const fs = require('fs')
@@ -16,16 +17,19 @@ const {
   notifyUrl,
   mp3OutputPath,
   googleHomeIp,
-  ngrokAuthtoken
+  ngrokAuthtoken,
+  notifyAuthToken
 } = loadConfig(process.env)
 
+// MP3配信用GETはGoogle Homeデバイス自身がURLを取得するため、
+// Authorizationヘッダーを付与できない。よって認証対象外とする(Issue #62)。
 app.get(mp3Url, (_, res) =>
   fs.readFile(mp3OutputPath, (_, data) =>
     res.status(200).send(new Buffer.from(data, 'binary'))
   )
 )
 
-app.post(notifyUrl, urlencodedParser, (req, res) => {
+app.post(notifyUrl, requireBearerToken(notifyAuthToken), urlencodedParser, (req, res) => {
 
   if (!req.body) {
       return res.sendStatus(400)
@@ -69,7 +73,7 @@ app.listen(serverPort, () => {
     const url = listener.url()
     console.log('ngrok Endpoints:' + url)
     console.log('POST example:')
-    console.log('curl -X POST -d "text=こんにちは" http://localhost:' + serverPort + notifyUrl)
+    console.log('curl -X POST -H "Authorization: Bearer $NOTIFY_AUTH_TOKEN" -d "text=こんにちは" http://localhost:' + serverPort + notifyUrl)
     googlehome.ngrokUrl(url + mp3Url)
   })()
 })

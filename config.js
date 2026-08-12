@@ -39,7 +39,8 @@ const loadConfig = (env) => ({
   notifyUrl: env.NOTIFY_URL_PATH || DEFAULT_NOTIFY_URL_PATH,
   mp3OutputPath: env.MP3_OUTPUT_PATH || DEFAULT_MP3_OUTPUT_PATH,
   googleHomeIp: requireEnv(env, 'GOOGLE_HOME_IP'),
-  ngrokAuthtoken: requireEnv(env, 'NGROK_AUTHTOKEN')
+  ngrokAuthtoken: requireEnv(env, 'NGROK_AUTHTOKEN'),
+  notifyAuthToken: requireEnv(env, 'NOTIFY_AUTH_TOKEN')
 })
 
 exports.loadConfig = loadConfig

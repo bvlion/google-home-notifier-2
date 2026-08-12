@@ -107,6 +107,51 @@ describe('google-home-notifier-2', () => {
     })
   })
 
+  describe('device()', () => {
+    test('IP未指定時、device()で設定した名前を含むmDNSサービスが見つかったデバイスへ接続する(派生元にあった公開APIの復元)', (done) => {
+      let serviceUpHandler
+      mockBrowser.on.mockImplementation((event, handler) => {
+        if (event === 'serviceUp') {
+          serviceUpHandler = handler
+        }
+      })
+
+      googlehome.device('Living Room')
+      googlehome.play('http://example.com/audio.mp3', (res) => {
+        expect(mockCastClient.connect).toHaveBeenCalledWith('192.168.1.77', expect.any(Function))
+        expect(res).toBe('Device notified')
+        done()
+      })
+
+      expect(mockBrowser.start).toHaveBeenCalled()
+      serviceUpHandler({
+        name: 'Living-Room-ABCD',
+        addresses: ['192.168.1.77'],
+        port: 8009
+      })
+    })
+
+    test('device()で設定した名前を含まないmDNSサービスは無視される', () => {
+      let serviceUpHandler
+      mockBrowser.on.mockImplementation((event, handler) => {
+        if (event === 'serviceUp') {
+          serviceUpHandler = handler
+        }
+      })
+
+      googlehome.device('Living Room')
+      googlehome.play('http://example.com/audio.mp3', jest.fn())
+
+      serviceUpHandler({
+        name: 'Kitchen-ABCD',
+        addresses: ['192.168.1.88'],
+        port: 8009
+      })
+
+      expect(mockCastClient.connect).not.toHaveBeenCalled()
+    })
+  })
+
   describe('volume()', () => {
     test('有効な範囲(0.0〜1.0)の値はデバイスの音量設定に反映される', (done) => {
       googlehome.ip('192.168.1.50')
@@ -140,6 +185,23 @@ describe('google-home-notifier-2', () => {
         expect(mockCastClient.setVolume).not.toHaveBeenCalled()
         done()
       })
+    })
+
+    test('接続中にvolume()が別の値へ変更されても、play()呼び出し時点のvolumeが使用される(並行リクエストによる上書き防止)', (done) => {
+      let connectCallback
+      mockCastClient.connect.mockImplementation((host, cb) => { connectCallback = cb })
+
+      googlehome.ip('192.168.1.50')
+      googlehome.volume(0.2)
+      googlehome.play('http://example.com/audio.mp3', () => {
+        expect(mockCastClient.setVolume).toHaveBeenCalledWith({ level: 0.2 }, expect.any(Function))
+        done()
+      })
+
+      // 別リクエストが接続中にvolume()を呼び出したことを模す
+      googlehome.volume(0.9)
+
+      connectCallback()
     })
   })
 
@@ -194,7 +256,7 @@ describe('google-home-notifier-2', () => {
       })
     })
 
-    test('TTS合成に失敗した場合、後続のファイル書き込みや再生は行われずコールバックも呼ばれない', () => {
+    test('TTS合成に失敗した場合、後続のファイル書き込みや再生は行われず、コールバックへ"error"が渡される', () => {
       mockSynthesizeSpeech.mockImplementation((request, cb) => cb(new Error('tts failed')))
       const callback = jest.fn()
 
@@ -204,10 +266,11 @@ describe('google-home-notifier-2', () => {
 
       expect(mockWriteFile).not.toHaveBeenCalled()
       expect(mockCastClient.connect).not.toHaveBeenCalled()
-      expect(callback).not.toHaveBeenCalled()
+      expect(callback).toHaveBeenCalledWith('error')
+      expect(callback).toHaveBeenCalledTimes(1)
     })
 
-    test('音声ファイルの書き込みに失敗した場合、デバイスへの再生は行われずコールバックも呼ばれない', () => {
+    test('音声ファイルの書き込みに失敗した場合、デバイスへの再生は行われず、コールバックへ"error"が渡される', () => {
       mockWriteFile.mockImplementation((path, data, encoding, cb) => cb(new Error('disk full')))
       const callback = jest.fn()
 
@@ -216,7 +279,53 @@ describe('google-home-notifier-2', () => {
       googlehome.notify('こんにちは', callback)
 
       expect(mockCastClient.connect).not.toHaveBeenCalled()
-      expect(callback).not.toHaveBeenCalled()
+      expect(callback).toHaveBeenCalledWith('error')
+      expect(callback).toHaveBeenCalledTimes(1)
+    })
+
+    test('TTS合成中にsetUp()のaudioFilePathが別の値へ変更されても、notify()呼び出し時点のパスへ書き込まれる(並行リクエストによる上書き防止)', (done) => {
+      let synthCallback
+      mockSynthesizeSpeech.mockImplementation((request, cb) => { synthCallback = cb })
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/first.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.notify('こんにちは', () => {
+        expect(mockWriteFile).toHaveBeenCalledWith(
+          '/tmp/first.mp3',
+          expect.any(Buffer),
+          'binary',
+          expect.any(Function)
+        )
+        done()
+      })
+
+      // 別リクエストがTTS合成中にsetUp()を呼び出したことを模す
+      googlehome.setUp('en-US', 'en-US-Standard-A', '/tmp/second.mp3')
+
+      synthCallback(null, { audioContent: Buffer.from('dummy-audio') })
+    })
+
+    test('TTS合成中にngrokUrl()が別の値へ変更されても、notify()呼び出し時点のURLが再生される(並行リクエストによる上書き防止)', (done) => {
+      let synthCallback
+      mockSynthesizeSpeech.mockImplementation((request, cb) => { synthCallback = cb })
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://first.ngrok.io/text-mp3')
+
+      googlehome.notify('こんにちは', () => {
+        expect(mockPlayer.load).toHaveBeenCalledWith(
+          expect.objectContaining({ contentId: 'https://first.ngrok.io/text-mp3' }),
+          { autoplay: true },
+          expect.any(Function)
+        )
+        done()
+      })
+
+      // 別リクエストがTTS合成中にngrokUrl()を呼び出したことを模す
+      googlehome.ngrokUrl('https://second.ngrok.io/text-mp3')
+
+      synthCallback(null, { audioContent: Buffer.from('dummy-audio') })
     })
   })
 
@@ -239,6 +348,61 @@ describe('google-home-notifier-2', () => {
       errorHandler(new Error('connection refused'))
 
       expect(callback).toHaveBeenCalledWith('error')
+      expect(callback).toHaveBeenCalledTimes(1)
+    })
+
+    test('receiverのlaunchに失敗した場合、コールバックに"error"が渡される', () => {
+      mockCastClient.launch.mockImplementation((receiver, cb) => cb(new Error('launch failed')))
+      const callback = jest.fn()
+
+      googlehome.ip('192.168.1.50')
+      googlehome.play('http://example.com/audio.mp3', callback)
+
+      expect(mockPlayer.load).not.toHaveBeenCalled()
+      expect(callback).toHaveBeenCalledWith('error')
+      expect(callback).toHaveBeenCalledTimes(1)
+    })
+
+    test('player.loadに失敗した場合、コールバックに"error"が渡される', () => {
+      mockPlayer.load.mockImplementation((media, opts, cb) => cb(new Error('load failed')))
+      const callback = jest.fn()
+
+      googlehome.ip('192.168.1.50')
+      googlehome.play('http://example.com/audio.mp3', callback)
+
+      expect(callback).toHaveBeenCalledWith('error')
+      expect(callback).toHaveBeenCalledTimes(1)
+    })
+
+    test('getVolume/setVolumeが失敗しても、再生自体は成功として扱われる(音量設定は補助的な処理のため)', (done) => {
+      mockCastClient.getVolume.mockImplementation((cb) => cb(new Error('getVolume failed')))
+      googlehome.ip('192.168.1.50')
+      googlehome.volume(0.5)
+
+      googlehome.play('http://example.com/audio.mp3', (res) => {
+        expect(mockCastClient.setVolume).not.toHaveBeenCalled()
+        expect(res).toBe('Device notified')
+        done()
+      })
+    })
+
+    test('再生成功のコールバックが呼ばれた後にclientの"error"イベントが発火しても、コールバックは再度呼ばれない(二重呼び出し防止)', (done) => {
+      let errorHandler
+      mockCastClient.on.mockImplementation((event, handler) => {
+        if (event === 'error') {
+          errorHandler = handler
+        }
+      })
+
+      const callback = jest.fn((res) => {
+        expect(res).toBe('Device notified')
+        errorHandler(new Error('connection dropped after success'))
+        expect(callback).toHaveBeenCalledTimes(1)
+        done()
+      })
+
+      googlehome.ip('192.168.1.50')
+      googlehome.play('http://example.com/audio.mp3', callback)
     })
   })
 })

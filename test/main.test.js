@@ -19,6 +19,7 @@ jest.mock('@ngrok/ngrok', () => ({
 }))
 
 const fs = require('fs')
+const net = require('net')
 const os = require('os')
 const path = require('path')
 
@@ -82,6 +83,47 @@ describe('createNotifyApp() - 通知用app(公開範囲: LAN / localhost想定�
 
     expect(res.status).toBe(404)
   })
+
+  test('notify()のコールバックへ"error"が渡された場合、HTTP responseは500で完了する', async () => {
+    mockGooglehome.notify.mockImplementationOnce((text, cb) => cb('error'))
+    await setUpApp()
+
+    const res = await fetch(`${baseUrl}/google-home-notifier`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'text=' + encodeURIComponent('こんにちは')
+    })
+
+    expect(res.status).toBe(500)
+  })
+
+  test('play()のコールバックへ"error"が渡された場合、HTTP responseは500で完了する', async () => {
+    mockGooglehome.play.mockImplementationOnce((url, cb) => cb('error'))
+    await setUpApp()
+
+    const res = await fetch(`${baseUrl}/google-home-notifier`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'text=' + encodeURIComponent('http://example.com/audio.mp3')
+    })
+
+    expect(res.status).toBe(500)
+  })
+
+  test('notify()呼び出しが同期的に例外を投げても、二重response(ERR_HTTP_HEADERS_SENT)にならずHTTP responseが完了する', async () => {
+    mockGooglehome.notify.mockImplementationOnce(() => {
+      throw new Error('synchronous failure')
+    })
+    await setUpApp()
+
+    const res = await fetch(`${baseUrl}/google-home-notifier`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'text=' + encodeURIComponent('こんにちは')
+    })
+
+    expect(res.status).toBe(500)
+  })
 })
 
 describe('createMp3App() - MP3配信用app(公開範囲: ngrokへforwardする対象)', () => {
@@ -127,6 +169,15 @@ describe('createMp3App() - MP3配信用app(公開範囲: ngrokへforwardする�
 
     expect(res.status).toBe(404)
   })
+
+  test('MP3ファイルが存在しない場合、GET /text-mp3 は404でHTTP responseが完了する', async () => {
+    fs.rmSync(mp3OutputPath, { force: true })
+    await setUpApp()
+
+    const res = await fetch(`${baseUrl}/text-mp3`)
+
+    expect(res.status).toBe(404)
+  })
 })
 
 describe('startMp3Server() - ngrokはMP3配信用serverのポートだけをforwardする', () => {
@@ -161,5 +212,28 @@ describe('startMp3Server() - ngrokはMP3配信用serverのポートだけをforw
     // 実際にMP3配信用appがlistenしていることも合わせて確認する
     const res = await fetch(`http://localhost:${assignedPort}/text-mp3`)
     expect(res.status).toBe(200)
+  })
+
+  test('ngrok.forward()が失敗した場合、Promiseがrejectされる(Unhandled rejection/Promise未完了にならない)', async () => {
+    mockNgrokForward.mockRejectedValue(new Error('ngrok forward failed'))
+    const mp3App = createMp3App({ mp3Url: '/text-mp3', mp3OutputPath })
+
+    await expect(
+      startMp3Server(mp3App, { mp3ServerPort: 0, mp3Url: '/text-mp3', ngrokAuthtoken: 'test-token' })
+    ).rejects.toThrow('ngrok forward failed')
+  })
+
+  test('MP3配信用serverのlistenに失敗した場合、Promiseがrejectされる(Promise未完了にならない)', async () => {
+    const blocker = net.createServer()
+    await new Promise((resolve) => blocker.listen(0, resolve))
+    const blockedPort = blocker.address().port
+
+    const mp3App = createMp3App({ mp3Url: '/text-mp3', mp3OutputPath })
+
+    await expect(
+      startMp3Server(mp3App, { mp3ServerPort: blockedPort, mp3Url: '/text-mp3', ngrokAuthtoken: 'test-token' })
+    ).rejects.toThrow()
+
+    await new Promise((resolve) => blocker.close(resolve))
   })
 })

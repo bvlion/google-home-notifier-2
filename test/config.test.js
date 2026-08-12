@@ -12,6 +12,7 @@ describe('loadConfig()', () => {
 
     expect(config).toEqual({
       serverPort: 8091,
+      mp3ServerPort: 8092,
       language: 'ja-JP',
       voice: 'ja-JP-Standard-A',
       mp3Url: '/text-mp3',
@@ -26,6 +27,7 @@ describe('loadConfig()', () => {
     const config = loadConfig({
       ...requiredEnv,
       SERVER_PORT: '3000',
+      MP3_SERVER_PORT: '3001',
       TTS_LANGUAGE: 'en-US',
       TTS_VOICE: 'en-US-Standard-A',
       MP3_URL_PATH: '/mp3',
@@ -36,6 +38,7 @@ describe('loadConfig()', () => {
 
     expect(config).toEqual({
       serverPort: 3000,
+      mp3ServerPort: 3001,
       language: 'en-US',
       voice: 'en-US-Standard-A',
       mp3Url: '/mp3',
@@ -76,6 +79,35 @@ describe('loadConfig()', () => {
   test('SERVER_PORT が TCPポートの上限(65535)を超える場合はエラーになる', () => {
     expect(() => loadConfig({ ...requiredEnv, SERVER_PORT: '65536' }))
       .toThrow('環境変数 SERVER_PORT には 1〜65535 の整数を設定してください。')
+  })
+
+  test('MP3_SERVER_PORT を指定しない場合、デフォルト値(8092)になる', () => {
+    const config = loadConfig(requiredEnv)
+
+    expect(config.mp3ServerPort).toBe(8092)
+  })
+
+  test('MP3_SERVER_PORT を指定した場合、その値が使われる', () => {
+    const config = loadConfig({ ...requiredEnv, MP3_SERVER_PORT: '9000' })
+
+    expect(config.mp3ServerPort).toBe(9000)
+  })
+
+  test('MP3_SERVER_PORT が数値でない場合はエラーになる', () => {
+    expect(() => loadConfig({ ...requiredEnv, MP3_SERVER_PORT: 'abc' }))
+      .toThrow('環境変数 MP3_SERVER_PORT には 1〜65535 の整数を設定してください。')
+  })
+
+  test('MP3_SERVER_PORT が範囲外(0以下、65535超)の場合はエラーになる', () => {
+    expect(() => loadConfig({ ...requiredEnv, MP3_SERVER_PORT: '0' }))
+      .toThrow('環境変数 MP3_SERVER_PORT には 1〜65535 の整数を設定してください。')
+    expect(() => loadConfig({ ...requiredEnv, MP3_SERVER_PORT: '65536' }))
+      .toThrow('環境変数 MP3_SERVER_PORT には 1〜65535 の整数を設定してください。')
+  })
+
+  test('SERVER_PORT と MP3_SERVER_PORT に同じ値を指定した場合はエラーになる(公開範囲の分離が成立しないため)', () => {
+    expect(() => loadConfig({ ...requiredEnv, SERVER_PORT: '9000', MP3_SERVER_PORT: '9000' }))
+      .toThrow('環境変数 SERVER_PORT と MP3_SERVER_PORT には異なるポート番号を設定してください')
   })
 })
 

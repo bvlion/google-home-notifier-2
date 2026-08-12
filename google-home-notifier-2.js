@@ -46,40 +46,49 @@ const notify = (message, callback) => start(message, callback, getSpeechUrl)
 
 const play = (mp3_url, callback) => start(mp3_url, callback, getPlayUrl)
 
-// deviceAddress/volumeLevelは呼び出し時点の値をここで捕捉し、以降の非同期処理へ引き回す。
-// 後続のTTS/Cast通信は非同期で完了するため、module共有状態を非同期コールバック内で
-// 再読込すると、その間に別リクエストがip()/volume()等を呼び出した場合に値が上書きされうる。
+// volumeLevel/language/voiceName/audioFilePath/ttsAudioUrlは呼び出し時点の値をここで
+// まとめて捕捉し、以降の処理へ引き回す。IP未指定時はfunc()の実行(getSpeechUrl/getPlayUrl)が
+// serviceUpまで非同期に遅延し、IP指定時もTTS/Cast通信自体が非同期で完了するため、
+// module共有状態を後続処理内で再読込すると、その間に別リクエストがsetUp()/volume()/
+// ngrokUrl()等を呼び出した場合に値が上書きされうる。
 const start = (target, callback, func) => {
-  const vol = volumeLevel
+  const settings = {
+    vol: volumeLevel,
+    lang: language,
+    voice: voiceName,
+    outputPath: audioFilePath,
+    playbackUrl: ttsAudioUrl
+  }
+
   if (!deviceAddress) {
     browser.start()
     browser.on('serviceUp', (service) => {
       console.log('Device "%s" at %s:%d', service.name, service.addresses[0], service.port)
       if (service.name.includes(deviceName.replace(' ', '-'))) {
         deviceAddress = service.addresses[0]
-        func(target, deviceAddress, vol, (res) => {
+        // 対象デバイスが見つかった場合のみ探索を終了する。対象外デバイスのserviceUpでは
+        // 探索を継続しないと、対象デバイスが後から見つかるケースを取りこぼす。
+        browser.stop()
+        func(target, deviceAddress, settings, (res) => {
           callback(res)
         })
       }
-      browser.stop()
     })
   } else {
-    func(target, deviceAddress, vol, (res) => {
+    func(target, deviceAddress, settings, (res) => {
       callback(res)
     })
   }
 }
 
-const getSpeechUrl = (text, host, vol, callback) => {
-  // audioFilePath/ttsAudioUrlも呼び出し時点の値を捕捉する(理由はstart()のコメント参照)。
-  const outputPath = audioFilePath
-  const playbackUrl = ttsAudioUrl
+const getSpeechUrl = (text, host, settings, callback) => {
+  const { vol, lang, voice, outputPath, playbackUrl } = settings
 
   const request = {
     input: {text: text},
     voice: {
-      languageCode: language,
-      name: voiceName
+      languageCode: lang,
+      name: voice
     },
     audioConfig: {
       audioEncoding: 'MP3',
@@ -107,8 +116,8 @@ const getSpeechUrl = (text, host, vol, callback) => {
   })
 }
 
-const getPlayUrl = (url, host, vol, callback) =>
-  onDeviceUp(host, url, vol, (res) => {
+const getPlayUrl = (url, host, settings, callback) =>
+  onDeviceUp(host, url, settings.vol, (res) => {
     callback(res)
   })
 

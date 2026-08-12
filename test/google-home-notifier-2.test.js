@@ -131,7 +131,7 @@ describe('google-home-notifier-2', () => {
       })
     })
 
-    test('device()で設定した名前を含まないmDNSサービスは無視される', () => {
+    test('device()で設定した名前を含まないmDNSサービスは無視され、探索を停止しない', () => {
       let serviceUpHandler
       mockBrowser.on.mockImplementation((event, handler) => {
         if (event === 'serviceUp') {
@@ -149,6 +149,86 @@ describe('google-home-notifier-2', () => {
       })
 
       expect(mockCastClient.connect).not.toHaveBeenCalled()
+      expect(mockBrowser.stop).not.toHaveBeenCalled()
+    })
+
+    test('対象外デバイスが先にserviceUpしても探索を継続し、後から見つかった対象デバイスへ接続する(複数デバイス環境での探索打ち切り防止)', (done) => {
+      let serviceUpHandler
+      mockBrowser.on.mockImplementation((event, handler) => {
+        if (event === 'serviceUp') {
+          serviceUpHandler = handler
+        }
+      })
+
+      googlehome.device('Living Room')
+      googlehome.play('http://example.com/audio.mp3', (res) => {
+        expect(mockCastClient.connect).toHaveBeenCalledWith('192.168.1.77', expect.any(Function))
+        expect(mockCastClient.connect).toHaveBeenCalledTimes(1)
+        expect(res).toBe('Device notified')
+        done()
+      })
+
+      // 対象外デバイスが先にserviceUpしても探索を打ち切らないこと
+      serviceUpHandler({
+        name: 'Kitchen-ABCD',
+        addresses: ['192.168.1.88'],
+        port: 8009
+      })
+      expect(mockCastClient.connect).not.toHaveBeenCalled()
+      expect(mockBrowser.stop).not.toHaveBeenCalled()
+
+      // その後、対象デバイスがserviceUpすれば接続されること
+      serviceUpHandler({
+        name: 'Living-Room-ABCD',
+        addresses: ['192.168.1.77'],
+        port: 8009
+      })
+      expect(mockBrowser.stop).toHaveBeenCalledTimes(1)
+    })
+
+    test('mDNS探索中に別リクエストがsetUp()/ngrokUrl()を呼び出しても、notify()呼び出し時点の設定値が使用される(並行リクエストによる上書き防止)', (done) => {
+      let serviceUpHandler
+      mockBrowser.on.mockImplementation((event, handler) => {
+        if (event === 'serviceUp') {
+          serviceUpHandler = handler
+        }
+      })
+
+      googlehome.device('Living Room')
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/first.mp3')
+      googlehome.ngrokUrl('https://first.ngrok.io/text-mp3')
+
+      googlehome.notify('こんにちは', (res) => {
+        expect(mockSynthesizeSpeech).toHaveBeenCalledWith(
+          expect.objectContaining({
+            voice: { languageCode: 'ja-JP', name: 'ja-JP-Standard-A' }
+          }),
+          expect.any(Function)
+        )
+        expect(mockWriteFile).toHaveBeenCalledWith(
+          '/tmp/first.mp3',
+          expect.any(Buffer),
+          'binary',
+          expect.any(Function)
+        )
+        expect(mockPlayer.load).toHaveBeenCalledWith(
+          expect.objectContaining({ contentId: 'https://first.ngrok.io/text-mp3' }),
+          { autoplay: true },
+          expect.any(Function)
+        )
+        expect(res).toBe('Device notified')
+        done()
+      })
+
+      // serviceUpが来る前に別リクエストがsetUp()/ngrokUrl()を呼び出したことを模す
+      googlehome.setUp('en-US', 'en-US-Standard-A', '/tmp/second.mp3')
+      googlehome.ngrokUrl('https://second.ngrok.io/text-mp3')
+
+      serviceUpHandler({
+        name: 'Living-Room-ABCD',
+        addresses: ['192.168.1.77'],
+        port: 8009
+      })
     })
   })
 

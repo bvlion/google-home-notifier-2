@@ -45,11 +45,10 @@ $ cp .env.example .env
 
 `.env` はアプリが自動読み込みするものではありません。実行前にシェルや systemd などから環境変数として渡してください（後述）。
 
-#### 必須
+#### 必須（共通）
 
 | 環境変数 | 説明 |
 | --- | --- |
-| `GOOGLE_HOME_IP` | Google Home のIPアドレス |
 | `NGROK_AUTHTOKEN` | ngrok の authtoken |
 
 #### 任意（省略時はデフォルト値を使用）
@@ -63,11 +62,51 @@ $ cp .env.example .env
 | `NOTIFY_URL_PATH` | 通知を受け付けるエンドポイントのパス | `/google-home-notifier` |
 | `MP3_OUTPUT_PATH` | 生成したMP3の出力先パス | `sample.mp3` |
 
+#### `GOOGLE_HOME_IP`（sample runner専用）
+
+`GOOGLE_HOME_IP` はライブラリ／共通設定としては必須ではありません。`googlehome.ip(ip)` を処理ごとに呼び出して通知先を切り替えるカスタムrunner（後述）では、この環境変数は使いません。
+
+一方、リポジトリ直下の `main.js`（固定1台向けsample runner、後述）を利用する場合は必須です。未設定のまま `main.js` を起動するとエラーになり起動できません。
+
+| 環境変数 | 説明 |
+| --- | --- |
+| `GOOGLE_HOME_IP` | Google Home のIPアドレス。`main.js`（sample runner）を利用する場合のみ必須 |
+
 #### Google Cloud認証関連
 
 | 環境変数 | 説明 |
 | --- | --- |
 | `GOOGLE_APPLICATION_CREDENTIALS` | サービスアカウントJSONのパス（ADCの標準環境変数。他のADC方式を使う場合は不要） |
+
+### サンプルrunnerとカスタムrunner
+
+`google-home-notifier-2.js` がコアライブラリで、通知先デバイスは `googlehome.ip(ip)` をリクエストごとに呼び出すことで、1プロセス内でも都度切り替えられます。
+
+- リポジトリ直下の `main.js`
+  - 固定1台のGoogle Home/Castデバイスにのみ通知する単純な利用例（sample runner）です。
+  - `GOOGLE_HOME_IP` を必須とし、起動時にそのIPを `googlehome.ip()` へ設定します。
+- `script/main.js` 等（Git管理対象外）
+  - 複数デバイスへの通知先切り替えや、家庭固有のリクエスト処理などを実装するカスタムrunnerの配置場所です。
+  - `script/` ディレクトリは `.gitignore` で除外されているため、利用者固有のロジックを自由に実装・保存できます。
+  - `GOOGLE_HOME_IP` 環境変数は使わず、リクエスト内容に応じて `googlehome.ip(ip)` を処理ごとに呼び出してください。
+  - `main.js` は「固定1台向けsample runner」専用のコードなので、`script/main.js` へコピーするだけでは動きません。以下をすべて行ってください。
+    1. `require('./google-home-notifier-2')` / `require('./config')` を、1階層下の `script/` から親を指すよう `require('../google-home-notifier-2')` / `require('../config')` に書き換える。
+    2. `config` の分割代入から `requireGoogleHomeIp` の import を削除する（`const { loadConfig, requireGoogleHomeIp } = require('../config')` → `const { loadConfig } = require('../config')`）。
+    3. 起動時に `GOOGLE_HOME_IP` を必須として検証している `const googleHomeIp = requireGoogleHomeIp(config)` の行を削除する。
+    4. リクエストハンドラ内の固定IPを設定している `googlehome.ip(googleHomeIp)` を、リクエスト内容（例: `req.body.ip` や家庭固有のルーティング条件）に応じて通知先を決める処理に置き換える。
+
+``` sh
+$ cp main.js script/main.js
+# script/main.js に対して行う変更:
+#   1. require('./google-home-notifier-2') → require('../google-home-notifier-2')
+#      require('./config')                 → require('../config')
+#   2. const { loadConfig, requireGoogleHomeIp } = require('../config')
+#      → const { loadConfig } = require('../config')  (requireGoogleHomeIp は使わない)
+#   3. const googleHomeIp = requireGoogleHomeIp(config) の行を削除
+#   4. googlehome.ip(googleHomeIp) を、リクエストに応じて通知先IPを決める処理へ置き換える
+#      (例: googlehome.ip(req.body.ip) 等)
+$ node script/main.js
+```
 
 ## 実行
 

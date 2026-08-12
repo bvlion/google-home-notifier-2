@@ -1,10 +1,9 @@
 'use strict'
 
-const { loadConfig } = require('../config')
+const { loadConfig, requireGoogleHomeIp } = require('../config')
 
 describe('loadConfig()', () => {
   const requiredEnv = {
-    GOOGLE_HOME_IP: '192.168.11.100',
     NGROK_AUTHTOKEN: 'test-token'
   }
 
@@ -18,7 +17,7 @@ describe('loadConfig()', () => {
       mp3Url: '/text-mp3',
       notifyUrl: '/google-home-notifier',
       mp3OutputPath: 'sample.mp3',
-      googleHomeIp: '192.168.11.100',
+      googleHomeIp: undefined,
       ngrokAuthtoken: 'test-token'
     })
   })
@@ -31,7 +30,8 @@ describe('loadConfig()', () => {
       TTS_VOICE: 'en-US-Standard-A',
       MP3_URL_PATH: '/mp3',
       NOTIFY_URL_PATH: '/notify',
-      MP3_OUTPUT_PATH: '/tmp/out.mp3'
+      MP3_OUTPUT_PATH: '/tmp/out.mp3',
+      GOOGLE_HOME_IP: '192.168.11.100'
     })
 
     expect(config).toEqual({
@@ -46,9 +46,10 @@ describe('loadConfig()', () => {
     })
   })
 
-  test('GOOGLE_HOME_IP が未設定の場合はエラーになる', () => {
-    expect(() => loadConfig({ NGROK_AUTHTOKEN: 'test-token' }))
-      .toThrow('環境変数 GOOGLE_HOME_IP を設定してください。')
+  test('GOOGLE_HOME_IP はアプリケーション全体の必須設定ではなく、未設定でもエラーにならない', () => {
+    const config = loadConfig(requiredEnv)
+
+    expect(config.googleHomeIp).toBeUndefined()
   })
 
   test('NGROK_AUTHTOKEN が未設定の場合はエラーになる', () => {
@@ -75,5 +76,20 @@ describe('loadConfig()', () => {
   test('SERVER_PORT が TCPポートの上限(65535)を超える場合はエラーになる', () => {
     expect(() => loadConfig({ ...requiredEnv, SERVER_PORT: '65536' }))
       .toThrow('環境変数 SERVER_PORT には 1〜65535 の整数を設定してください。')
+  })
+})
+
+describe('requireGoogleHomeIp()', () => {
+  test('GOOGLE_HOME_IP が設定されている場合、その値を返す(固定1台向けsample runnerでの利用)', () => {
+    const config = loadConfig({ NGROK_AUTHTOKEN: 'test-token', GOOGLE_HOME_IP: '192.168.11.100' })
+
+    expect(requireGoogleHomeIp(config)).toBe('192.168.11.100')
+  })
+
+  test('GOOGLE_HOME_IP が未設定の場合はエラーになる(config.js全体は必須にしないが、sample runner側で要求する)', () => {
+    const config = loadConfig({ NGROK_AUTHTOKEN: 'test-token' })
+
+    expect(() => requireGoogleHomeIp(config))
+      .toThrow('環境変数 GOOGLE_HOME_IP を設定してください')
   })
 })

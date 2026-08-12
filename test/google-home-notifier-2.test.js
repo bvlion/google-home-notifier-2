@@ -89,6 +89,22 @@ describe('google-home-notifier-2', () => {
         done()
       })
     })
+
+    test('リクエストごとに異なるIPを指定した場合、それぞれ直近に指定したIPへ再生される(複数デバイスへの通知先切り替え)', (done) => {
+      googlehome.ip('192.168.1.50')
+
+      googlehome.play('http://example.com/audio1.mp3', () => {
+        expect(mockCastClient.connect).toHaveBeenNthCalledWith(1, '192.168.1.50', expect.any(Function))
+
+        googlehome.ip('192.168.1.99')
+
+        googlehome.play('http://example.com/audio2.mp3', () => {
+          expect(mockCastClient.connect).toHaveBeenNthCalledWith(2, '192.168.1.99', expect.any(Function))
+          expect(mockCastClient.connect).toHaveBeenCalledTimes(2)
+          done()
+        })
+      })
+    })
   })
 
   describe('volume()', () => {

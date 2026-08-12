@@ -45,7 +45,7 @@ $ cp .env.example .env
 
 `.env` はアプリが自動読み込みするものではありません。実行前にシェルや systemd などから環境変数として渡してください（後述）。
 
-#### 必須
+#### 必須（共通）
 
 | 環境変数 | 説明 |
 | --- | --- |
@@ -55,13 +55,22 @@ $ cp .env.example .env
 
 | 環境変数 | 説明 | デフォルト値 |
 | --- | --- | --- |
-| `GOOGLE_HOME_IP` | Google Home のIPアドレス。リポジトリ直下の `main.js`（固定1台向けサンプルrunner）でのみ使用（後述） | 未設定（設定しない場合の挙動は後述） |
 | `SERVER_PORT` | サーバーのポート番号 | `8091` |
 | `TTS_LANGUAGE` | Text-to-Speech の言語コード（[参考](https://cloud.google.com/text-to-speech/docs/voices)） | `ja-JP` |
 | `TTS_VOICE` | Text-to-Speech の音声名（[参考](https://cloud.google.com/text-to-speech/docs/voices)） | `ja-JP-Standard-A` |
 | `MP3_URL_PATH` | 生成したMP3を配信するエンドポイントのパス | `/text-mp3` |
 | `NOTIFY_URL_PATH` | 通知を受け付けるエンドポイントのパス | `/google-home-notifier` |
 | `MP3_OUTPUT_PATH` | 生成したMP3の出力先パス | `sample.mp3` |
+
+#### `GOOGLE_HOME_IP`（sample runner専用）
+
+`GOOGLE_HOME_IP` はライブラリ／共通設定としては必須ではありません。`googlehome.ip(ip)` を処理ごとに呼び出して通知先を切り替えるカスタムrunner（後述）では、この環境変数は使いません。
+
+一方、リポジトリ直下の `main.js`（固定1台向けsample runner、後述）を利用する場合は必須です。未設定のまま `main.js` を起動するとエラーになり起動できません。
+
+| 環境変数 | 説明 |
+| --- | --- |
+| `GOOGLE_HOME_IP` | Google Home のIPアドレス。`main.js`（sample runner）を利用する場合のみ必須 |
 
 #### Google Cloud認証関連
 
@@ -75,14 +84,18 @@ $ cp .env.example .env
 
 - リポジトリ直下の `main.js`
   - 固定1台のGoogle Home/Castデバイスにのみ通知する単純な利用例（sample runner）です。
-  - `GOOGLE_HOME_IP` を設定した場合のみ、そのIPへ固定で通知します。設定しない場合は `googlehome.ip()` を呼び出さないため、mDNSディスカバリでのデバイス検出に委ねられます。
+  - `GOOGLE_HOME_IP` を必須とし、起動時にそのIPを `googlehome.ip()` へ設定します。
 - `script/main.js` 等（Git管理対象外）
   - 複数デバイスへの通知先切り替えや、家庭固有のリクエスト処理などを実装するカスタムrunnerの配置場所です。
-  - `script/` ディレクトリは `.gitignore` で除外されているため、リクエスト内容に応じて `googlehome.ip(ip)` を呼び出すなど、利用者固有のロジックを自由に実装・保存できます。
-  - `main.js` をコピーして必要な処理を追加する形で作成できます。
+  - `script/` ディレクトリは `.gitignore` で除外されているため、利用者固有のロジックを自由に実装・保存できます。
+  - `GOOGLE_HOME_IP` 環境変数は使わず、リクエスト内容に応じて `googlehome.ip(ip)` を処理ごとに呼び出してください。
+  - `main.js` はリポジトリ直下から `require('./google-home-notifier-2')` / `require('./config')` している（1階層下の `script/` からは `./` では届かない）ため、`main.js` をそのまま `script/main.js` へコピーしただけでは動きません。コピー後、この2つの `require` パスを `../google-home-notifier-2` / `../config` に書き換えてください。
 
 ``` sh
 $ cp main.js script/main.js
+# script/main.js 内の require('./google-home-notifier-2') → require('../google-home-notifier-2')
+#                 require('./config')                   → require('../config')
+# に書き換えたうえで、必要な処理（IPルーティング等）を追加する
 $ node script/main.js
 ```
 

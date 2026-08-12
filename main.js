@@ -1,5 +1,5 @@
 const googlehome = require('./google-home-notifier-2')
-const { loadConfig } = require('./config')
+const { loadConfig, requireGoogleHomeIp } = require('./config')
 const ngrok = require("@ngrok/ngrok")
 const bodyParser = require('body-parser')
 const fs = require('fs')
@@ -8,6 +8,7 @@ const app = express()
 
 const urlencodedParser = bodyParser.urlencoded({ extended: false })
 
+const config = loadConfig(process.env)
 const {
   serverPort,
   language,
@@ -15,9 +16,12 @@ const {
   mp3Url,
   notifyUrl,
   mp3OutputPath,
-  googleHomeIp,
   ngrokAuthtoken
-} = loadConfig(process.env)
+} = config
+
+// このファイルは固定1台のデバイスにのみ通知するsample runnerのため、
+// GOOGLE_HOME_IP を必須として検証する(ライブラリ/共通設定としては任意のまま)。
+const googleHomeIp = requireGoogleHomeIp(config)
 
 app.get(mp3Url, (_, res) =>
   fs.readFile(mp3OutputPath, (_, data) =>
@@ -34,12 +38,7 @@ app.post(notifyUrl, urlencodedParser, (req, res) => {
   const text = req.body.text
   if (text) {
     googlehome.setUp(language, voice, mp3OutputPath)
-    // GOOGLE_HOME_IP は固定の1台のみへ通知するこのサンプルrunner向けの任意設定。
-    // リクエストごとに通知先を切り替えたい場合は、script/ 以下のカスタムrunnerで
-    // リクエスト内容に応じて googlehome.ip(ip) を呼び出す実装にすること。
-    if (googleHomeIp) {
-      googlehome.ip(googleHomeIp)
-    }
+    googlehome.ip(googleHomeIp)
 
     if (req.body.volume > 0) {
         googlehome.volume(req.body.volume / 100)

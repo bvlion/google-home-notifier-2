@@ -41,9 +41,20 @@ const loadConfig = (env) => ({
   mp3OutputPath: env.MP3_OUTPUT_PATH || DEFAULT_MP3_OUTPUT_PATH,
   // 固定の1台のみに通知する用途のリポジトリ直下 main.js が任意で使う値。
   // リクエストごとに googlehome.ip(ip) で通知先を切り替える運用(カスタムrunner)では不要なため、
-  // アプリケーション全体の必須値にはしない。
+  // アプリケーション全体の必須値にはしない。要否は利用側(sample runnerなら requireGoogleHomeIp())で判断する。
   googleHomeIp: env.GOOGLE_HOME_IP || undefined,
   ngrokAuthtoken: requireEnv(env, 'NGROK_AUTHTOKEN')
 })
 
+// 固定1台向けsample runner(リポジトリ直下 main.js)専用の検証。
+// googleHomeIp はライブラリ/共通設定としては必須ではないため loadConfig() には含めず、
+// GOOGLE_HOME_IP を必要とする利用側だけがこの関数で明示的に検証する。
+const requireGoogleHomeIp = (config) => {
+  if (!config.googleHomeIp) {
+    throw new Error('環境変数 GOOGLE_HOME_IP を設定してください(固定1台向けsample runnerのmain.jsを使う場合は必須です。リクエストごとに通知先を切り替えたい場合はscript/以下のカスタムrunnerでgooglehome.ip(ip)を呼び出してください)。')
+  }
+  return config.googleHomeIp
+}
+
 exports.loadConfig = loadConfig
+exports.requireGoogleHomeIp = requireGoogleHomeIp

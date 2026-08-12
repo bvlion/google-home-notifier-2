@@ -33,6 +33,23 @@ $ npm install
 
 Ngrok で [auth key](https://dashboard.ngrok.com/get-started/your-authtoken) を発行します。取得した値は環境変数 `NGROK_AUTHTOKEN` に設定します。
 
+このプロジェクトで ngrok を使う目的は、通知POSTを外部公開することではなく、**Text-to-Speechで生成したMP3ファイルをGoogle Home / Castデバイス自身が取得できるURLを用意すること**です。
+
+そのため、通知を受け付ける server（`SERVER_PORT`、POST `/google-home-notifier`）とMP3を配信する server（`MP3_SERVER_PORT`、GET `/text-mp3`）は別ポートに分かれており、**ngrokはMP3配信用serverだけをforward**します。通知POSTはngrok経由では到達できず、LAN / localhost等の信頼できるネットワークから利用する前提です。
+
+```
+LAN / localhost                      Google Home / Cast
+      |                                     |
+      v                                   ngrok
+通知用server                                |
+POST /google-home-notifier                  v
+:SERVER_PORT (既定8091)              MP3配信用server
+                                     GET /text-mp3
+                                     :MP3_SERVER_PORT (既定8092)
+```
+
+ngrok URLの固定化は行っていません。サーバー起動のたびに新しく取得したURLが自動的に利用されます。
+
 ### 環境変数
 
 ソースコードを直接編集する必要はありません。以下の環境変数で設定します。
@@ -55,7 +72,8 @@ $ cp .env.example .env
 
 | 環境変数 | 説明 | デフォルト値 |
 | --- | --- | --- |
-| `SERVER_PORT` | サーバーのポート番号 | `8091` |
+| `SERVER_PORT` | 通知用server（POST `/google-home-notifier`）のポート番号。ngrokへは公開されません | `8091` |
+| `MP3_SERVER_PORT` | MP3配信用server（GET `/text-mp3`）のポート番号。ngrokはこのポートだけをforwardします。`SERVER_PORT` と同じ値は設定できません | `8092` |
 | `TTS_LANGUAGE` | Text-to-Speech の言語コード（[参考](https://cloud.google.com/text-to-speech/docs/voices)） | `ja-JP` |
 | `TTS_VOICE` | Text-to-Speech の音声名（[参考](https://cloud.google.com/text-to-speech/docs/voices)） | `ja-JP-Standard-A` |
 | `MP3_URL_PATH` | 生成したMP3を配信するエンドポイントのパス | `/text-mp3` |
@@ -94,6 +112,7 @@ $ cp .env.example .env
     2. `config` の分割代入から `requireGoogleHomeIp` の import を削除する（`const { loadConfig, requireGoogleHomeIp } = require('../config')` → `const { loadConfig } = require('../config')`）。
     3. 起動時に `GOOGLE_HOME_IP` を必須として検証している `const googleHomeIp = requireGoogleHomeIp(config)` の行を削除する。
     4. リクエストハンドラ内の固定IPを設定している `googlehome.ip(googleHomeIp)` を、リクエスト内容（例: `req.body.ip` や家庭固有のルーティング条件）に応じて通知先を決める処理に置き換える。
+  - `main.js` は通知用app（`createNotifyApp`）とMP3配信用app（`createMp3App`）を別ポートで起動し、ngrokはMP3配信用appだけをforwardする構成になっています。カスタムrunnerを作る場合も、この「通知POSTはngrokへ公開しない」構成を維持してください。`createNotifyApp` に渡す `googleHomeIp` を固定値ではなく、リクエストごとに解決した値に差し替える形であれば、この構成を崩さずにカスタムルーティングを実装できます。
 
 ``` sh
 $ cp main.js script/main.js

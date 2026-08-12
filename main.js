@@ -34,7 +34,12 @@ app.post(notifyUrl, urlencodedParser, (req, res) => {
   const text = req.body.text
   if (text) {
     googlehome.setUp(language, voice, mp3OutputPath)
-    googlehome.ip(googleHomeIp)
+    // GOOGLE_HOME_IP は固定の1台のみへ通知するこのサンプルrunner向けの任意設定。
+    // リクエストごとに通知先を切り替えたい場合は、script/ 以下のカスタムrunnerで
+    // リクエスト内容に応じて googlehome.ip(ip) を呼び出す実装にすること。
+    if (googleHomeIp) {
+      googlehome.ip(googleHomeIp)
+    }
 
     if (req.body.volume > 0) {
         googlehome.volume(req.body.volume / 100)

@@ -49,13 +49,13 @@ $ cp .env.example .env
 
 | 環境変数 | 説明 |
 | --- | --- |
-| `GOOGLE_HOME_IP` | Google Home のIPアドレス |
 | `NGROK_AUTHTOKEN` | ngrok の authtoken |
 
 #### 任意（省略時はデフォルト値を使用）
 
 | 環境変数 | 説明 | デフォルト値 |
 | --- | --- | --- |
+| `GOOGLE_HOME_IP` | Google Home のIPアドレス。リポジトリ直下の `main.js`（固定1台向けサンプルrunner）でのみ使用（後述） | 未設定（設定しない場合の挙動は後述） |
 | `SERVER_PORT` | サーバーのポート番号 | `8091` |
 | `TTS_LANGUAGE` | Text-to-Speech の言語コード（[参考](https://cloud.google.com/text-to-speech/docs/voices)） | `ja-JP` |
 | `TTS_VOICE` | Text-to-Speech の音声名（[参考](https://cloud.google.com/text-to-speech/docs/voices)） | `ja-JP-Standard-A` |
@@ -68,6 +68,23 @@ $ cp .env.example .env
 | 環境変数 | 説明 |
 | --- | --- |
 | `GOOGLE_APPLICATION_CREDENTIALS` | サービスアカウントJSONのパス（ADCの標準環境変数。他のADC方式を使う場合は不要） |
+
+### サンプルrunnerとカスタムrunner
+
+`google-home-notifier-2.js` がコアライブラリで、通知先デバイスは `googlehome.ip(ip)` をリクエストごとに呼び出すことで、1プロセス内でも都度切り替えられます。
+
+- リポジトリ直下の `main.js`
+  - 固定1台のGoogle Home/Castデバイスにのみ通知する単純な利用例（sample runner）です。
+  - `GOOGLE_HOME_IP` を設定した場合のみ、そのIPへ固定で通知します。設定しない場合は `googlehome.ip()` を呼び出さないため、mDNSディスカバリでのデバイス検出に委ねられます。
+- `script/main.js` 等（Git管理対象外）
+  - 複数デバイスへの通知先切り替えや、家庭固有のリクエスト処理などを実装するカスタムrunnerの配置場所です。
+  - `script/` ディレクトリは `.gitignore` で除外されているため、リクエスト内容に応じて `googlehome.ip(ip)` を呼び出すなど、利用者固有のロジックを自由に実装・保存できます。
+  - `main.js` をコピーして必要な処理を追加する形で作成できます。
+
+``` sh
+$ cp main.js script/main.js
+$ node script/main.js
+```
 
 ## 実行
 

@@ -1,8 +1,9 @@
 'use strict'
 
 // main.js が利用する外部設定値(環境変数)を解決する。
-// Google Home の IP や ngrok の authtoken など環境固有・secretな値は、
-// 実値のデフォルトを持たせず必須値として扱う。
+// ngrok の authtoken など secret な値は、実値のデフォルトを持たせず必須値として扱う。
+// Google Home の IP はリクエストごとに googlehome.ip(ip) で切り替える運用を妨げないよう、
+// アプリケーション全体の必須値にはしない(固定1台向けサンプルrunnerでのみ任意に使う)。
 
 const DEFAULT_SERVER_PORT = 8091
 const MAX_TCP_PORT = 65535
@@ -38,7 +39,10 @@ const loadConfig = (env) => ({
   mp3Url: env.MP3_URL_PATH || DEFAULT_MP3_URL_PATH,
   notifyUrl: env.NOTIFY_URL_PATH || DEFAULT_NOTIFY_URL_PATH,
   mp3OutputPath: env.MP3_OUTPUT_PATH || DEFAULT_MP3_OUTPUT_PATH,
-  googleHomeIp: requireEnv(env, 'GOOGLE_HOME_IP'),
+  // 固定の1台のみに通知する用途のリポジトリ直下 main.js が任意で使う値。
+  // リクエストごとに googlehome.ip(ip) で通知先を切り替える運用(カスタムrunner)では不要なため、
+  // アプリケーション全体の必須値にはしない。
+  googleHomeIp: env.GOOGLE_HOME_IP || undefined,
   ngrokAuthtoken: requireEnv(env, 'NGROK_AUTHTOKEN')
 })
 

@@ -89,13 +89,22 @@ $ cp .env.example .env
   - 複数デバイスへの通知先切り替えや、家庭固有のリクエスト処理などを実装するカスタムrunnerの配置場所です。
   - `script/` ディレクトリは `.gitignore` で除外されているため、利用者固有のロジックを自由に実装・保存できます。
   - `GOOGLE_HOME_IP` 環境変数は使わず、リクエスト内容に応じて `googlehome.ip(ip)` を処理ごとに呼び出してください。
-  - `main.js` はリポジトリ直下から `require('./google-home-notifier-2')` / `require('./config')` している（1階層下の `script/` からは `./` では届かない）ため、`main.js` をそのまま `script/main.js` へコピーしただけでは動きません。コピー後、この2つの `require` パスを `../google-home-notifier-2` / `../config` に書き換えてください。
+  - `main.js` は「固定1台向けsample runner」専用のコードなので、`script/main.js` へコピーするだけでは動きません。以下をすべて行ってください。
+    1. `require('./google-home-notifier-2')` / `require('./config')` を、1階層下の `script/` から親を指すよう `require('../google-home-notifier-2')` / `require('../config')` に書き換える。
+    2. `config` の分割代入から `requireGoogleHomeIp` の import を削除する（`const { loadConfig, requireGoogleHomeIp } = require('../config')` → `const { loadConfig } = require('../config')`）。
+    3. 起動時に `GOOGLE_HOME_IP` を必須として検証している `const googleHomeIp = requireGoogleHomeIp(config)` の行を削除する。
+    4. リクエストハンドラ内の固定IPを設定している `googlehome.ip(googleHomeIp)` を、リクエスト内容（例: `req.body.ip` や家庭固有のルーティング条件）に応じて通知先を決める処理に置き換える。
 
 ``` sh
 $ cp main.js script/main.js
-# script/main.js 内の require('./google-home-notifier-2') → require('../google-home-notifier-2')
-#                 require('./config')                   → require('../config')
-# に書き換えたうえで、必要な処理（IPルーティング等）を追加する
+# script/main.js に対して行う変更:
+#   1. require('./google-home-notifier-2') → require('../google-home-notifier-2')
+#      require('./config')                 → require('../config')
+#   2. const { loadConfig, requireGoogleHomeIp } = require('../config')
+#      → const { loadConfig } = require('../config')  (requireGoogleHomeIp は使わない)
+#   3. const googleHomeIp = requireGoogleHomeIp(config) の行を削除
+#   4. googlehome.ip(googleHomeIp) を、リクエストに応じて通知先IPを決める処理へ置き換える
+#      (例: googlehome.ip(req.body.ip) 等)
 $ node script/main.js
 ```
 

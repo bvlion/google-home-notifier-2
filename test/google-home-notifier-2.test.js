@@ -29,11 +29,12 @@ jest.mock('castv2-client', () => ({
 }))
 
 const mockSynthesizeSpeech = jest.fn()
+const mockTextToSpeechClient = jest.fn(() => ({
+  synthesizeSpeech: mockSynthesizeSpeech
+}))
 
 jest.mock('@google-cloud/text-to-speech', () => ({
-  TextToSpeechClient: jest.fn(() => ({
-    synthesizeSpeech: mockSynthesizeSpeech
-  }))
+  TextToSpeechClient: mockTextToSpeechClient
 }))
 
 // jest.resetModules() によってモジュールレジストリがリセットされるたびに、
@@ -69,6 +70,13 @@ describe('google-home-notifier-2', () => {
     mockWriteFile.mockImplementation((path, data, encoding, cb) => cb(null))
 
     googlehome = require('../google-home-notifier-2')
+  })
+
+  describe('Text-to-Speechクライアントの認証', () => {
+    test('script/target.json 等の固定パス指定を行わず、引数なしでクライアントを生成する(Google Cloud標準のADCに委ねる)', () => {
+      expect(mockTextToSpeechClient).toHaveBeenCalledTimes(1)
+      expect(mockTextToSpeechClient).toHaveBeenCalledWith()
+    })
   })
 
   describe('ip()', () => {

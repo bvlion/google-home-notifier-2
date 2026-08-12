@@ -4,6 +4,7 @@
   "description": "",
   "main": "google-home-notifier-2.js",
   "scripts": {
+    "start": "node main.js",
     "test": "jest",
     "lint": "eslint ."
   },

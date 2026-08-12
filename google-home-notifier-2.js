@@ -9,10 +9,9 @@ const mdns = require('mdns')
 const browser = mdns.createBrowser(mdns.tcp('googlecast'))
 const fs = require('fs')
 const textToSpeech = require('@google-cloud/text-to-speech')
-const config = {
-  keyFilename: __dirname + '/script/target.json'
-}
-const client = new textToSpeech.TextToSpeechClient(config)
+// Google Cloud クライアントライブラリの標準的な認証(Application Default Credentials)を利用する。
+// サービスアカウントJSONを使う場合は環境変数 GOOGLE_APPLICATION_CREDENTIALS にそのパスを設定する。
+const client = new textToSpeech.TextToSpeechClient()
 
 var audioFilePath
 var deviceAddress

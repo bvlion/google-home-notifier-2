@@ -78,3 +78,7 @@ WorkingDirectory=/home/pi/google-home-notifier
 [Install]
 WantedBy=multi-user.target
 ```
+
+## License
+
+MIT License. 派生元 [noelportugal/google-home-notifier](https://github.com/noelportugal/google-home-notifier) のクレジットについては [NOTICE](./NOTICE) を参照してください。

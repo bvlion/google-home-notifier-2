@@ -29,7 +29,7 @@ var setUp = (lang, voice, path) => {
 
 var ip = (ip) => deviceAddress = ip
 
-// 既存の挙動を維持するため意図的に上の `var volume` と同名で再代入している (Issue #63 の範囲外)
+// 既存の挙動を維持するため意図的に上の `var volume` と同名で再代入している (Issue #66 で対応予定)
 // eslint-disable-next-line no-redeclare
 var volume = (newVolume) => {
   if (0.0 <= newVolume && newVolume <= 1.0) {
@@ -38,7 +38,7 @@ var volume = (newVolume) => {
 }
 
 // eslint-disable-next-line no-redeclare
-var ngrokUrl = (url) => ngrokUrl = url
+var ngrokUrl = (url) => ngrokUrl = url // Issue #66 で対応予定
 
 const notify = (message, callback) => start(message, callback, getSpeechUrl)
 
@@ -49,7 +49,7 @@ const start = (target, callback, func) => {
     browser.start()
     browser.on('serviceUp', (service) => {
       console.log('Device "%s" at %s:%d', service.name, service.addresses[0], service.port)
-      // `device` は未定義のまま残っている既存の不具合 (Issue #63 の範囲外、別途 Issue 化を推奨)
+      // `device` は未定義のまま残っている既存の不具合 (Issue #66 で対応予定)
       // eslint-disable-next-line no-undef
       if (service.name.includes(device.replace(' ', '-'))) {
         deviceAddress = service.addresses[0]

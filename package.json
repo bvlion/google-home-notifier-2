@@ -4,7 +4,8 @@
   "description": "",
   "main": "google-home-notifier-2.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest",
+    "lint": "eslint ."
   },
   "author": "bvlion",
   "keywords": [
@@ -20,5 +21,11 @@
     "castv2-client": "^1.2.0",
     "express": "^5.2.1",
     "mdns": "^2.7.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.10.0",
+    "jest": "^30.4.2"
   }
 }

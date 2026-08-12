@@ -29,13 +29,16 @@ var setUp = (lang, voice, path) => {
 
 var ip = (ip) => deviceAddress = ip
 
+// 既存の挙動を維持するため意図的に上の `var volume` と同名で再代入している (Issue #66 で対応予定)
+// eslint-disable-next-line no-redeclare
 var volume = (newVolume) => {
   if (0.0 <= newVolume && newVolume <= 1.0) {
     volume = newVolume
   }
 }
 
-var ngrokUrl = (url) => ngrokUrl = url
+// eslint-disable-next-line no-redeclare
+var ngrokUrl = (url) => ngrokUrl = url // Issue #66 で対応予定
 
 const notify = (message, callback) => start(message, callback, getSpeechUrl)
 
@@ -46,6 +49,8 @@ const start = (target, callback, func) => {
     browser.start()
     browser.on('serviceUp', (service) => {
       console.log('Device "%s" at %s:%d', service.name, service.addresses[0], service.port)
+      // `device` は未定義のまま残っている既存の不具合 (Issue #66 で対応予定)
+      // eslint-disable-next-line no-undef
       if (service.name.includes(device.replace(' ', '-'))) {
         deviceAddress = service.addresses[0]
         func(target, deviceAddress, (res) => {
@@ -102,8 +107,8 @@ const onDeviceUp = (host, url, callback) => {
   const client = new Client()
   client.connect(host, () => {
     if (volume) {
-      client.getVolume((_, v) =>
-        client.setVolume({level: volume}, (_, v) => {})
+      client.getVolume((_, _v) =>
+        client.setVolume({level: volume}, (_, _v) => {})
       )
     }
     client.launch(DefaultMediaReceiver, (_, player) => {
@@ -113,7 +118,7 @@ const onDeviceUp = (host, url, callback) => {
         contentType: 'audio/mp3',
         streamType: 'BUFFERED' // or LIVE
       }
-      player.load(media, { autoplay: true }, (_, status) => {
+      player.load(media, { autoplay: true }, (_, _status) => {
         client.close()
         callback('Device notified')
       })

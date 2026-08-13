@@ -1,5 +1,6 @@
 const googlehome = require('./google-home-notifier-2')
 const { loadConfig, requireGoogleHomeIp } = require('./config')
+const { isValidRequestId, resolveRequestMp3Path } = require('./request-mp3')
 const ngrok = require("@ngrok/ngrok")
 const bodyParser = require('body-parser')
 const fs = require('fs')
@@ -60,11 +61,26 @@ const createNotifyApp = ({ notifyUrl, googleHomeIp, language, voice, mp3OutputPa
 }
 
 // MP3配信用app。Google Home / Castデバイスが生成済みMP3を取得できるよう、このappだけをngrokへ公開する。
+// #73対応: notify()はTTSごとに一意なファイルへ書き込み、Castへは ?id=<request-id> 付きのURLを渡す
+// (google-home-notifier-2.js の resolveRequestMp3Path()と同じ組み立てルールをrequest-mp3.jsで共有する)。
+// idはHTTPリクエストから受け取るため、isValidRequestId()で許可文字(内部生成のhex文字列)のみに
+// 限定してからパスを組み立て、path traversalを防ぐ。id未指定時は既存どおりmp3OutputPathを返す。
 const createMp3App = ({ mp3Url, mp3OutputPath }) => {
   const app = express()
 
-  app.get(mp3Url, (_, res) =>
-    fs.readFile(mp3OutputPath, (err, data) => {
+  app.get(mp3Url, (req, res) => {
+    const id = req.query.id
+    let targetPath = mp3OutputPath
+
+    if (id !== undefined) {
+      if (!isValidRequestId(id)) {
+        res.sendStatus(400)
+        return
+      }
+      targetPath = resolveRequestMp3Path(mp3OutputPath, id)
+    }
+
+    fs.readFile(targetPath, (err, data) => {
       if (err) {
         console.error('ERROR:', err)
         res.sendStatus(err.code === 'ENOENT' ? 404 : 500)
@@ -72,7 +88,7 @@ const createMp3App = ({ mp3Url, mp3OutputPath }) => {
       }
       res.status(200).send(Buffer.from(data, 'binary'))
     })
-  )
+  })
 
   return app
 }

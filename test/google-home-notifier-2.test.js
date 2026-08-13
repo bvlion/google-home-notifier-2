@@ -42,10 +42,28 @@ jest.mock('@google-cloud/text-to-speech', () => ({
 // 生成すると、テストファイル側が保持する参照とソース側が実際に require する
 // 参照がずれてしまうため、永続する mock 関数をここで定義して参照を固定する。
 const mockWriteFile = jest.fn()
+const mockUnlink = jest.fn()
 
 jest.mock('fs', () => ({
-  writeFile: mockWriteFile
+  writeFile: mockWriteFile,
+  unlink: mockUnlink
 }))
+
+const { CLEANUP_DELAY_MS } = require('../request-mp3')
+
+// setUp()のmp3OutputPathを基準に組み立てられる、リクエスト固有ファイルパスの形式
+// (例: /tmp/first.mp3 -> /tmp/first-<32桁hex>.mp3)。
+const REQUEST_PATH_PATTERN = (basePath) => {
+  const dir = basePath.slice(0, basePath.lastIndexOf('/') + 1)
+  const withoutExt = basePath.slice(basePath.lastIndexOf('/') + 1, basePath.lastIndexOf('.'))
+  const ext = basePath.slice(basePath.lastIndexOf('.'))
+  return new RegExp(`^${dir}${withoutExt}-[0-9a-f]{32}${ext}$`)
+}
+
+// ngrokUrl()で設定した固定URLを基準に組み立てられる、リクエスト固有配信URLの形式
+// (例: https://example.ngrok.io/text-mp3 -> https://example.ngrok.io/text-mp3?id=<32桁hex>)。
+const REQUEST_URL_PATTERN = (baseUrl) =>
+  new RegExp(`^${baseUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\?id=[0-9a-f]{32}$`)
 
 describe('google-home-notifier-2', () => {
   let googlehome
@@ -68,8 +86,13 @@ describe('google-home-notifier-2', () => {
     )
 
     mockWriteFile.mockImplementation((path, data, encoding, cb) => cb(null))
+    mockUnlink.mockImplementation((path, cb) => cb(null))
 
     googlehome = require('../google-home-notifier-2')
+  })
+
+  afterEach(() => {
+    jest.useRealTimers()
   })
 
   describe('Text-to-Speechクライアントの認証', () => {
@@ -206,13 +229,13 @@ describe('google-home-notifier-2', () => {
           expect.any(Function)
         )
         expect(mockWriteFile).toHaveBeenCalledWith(
-          '/tmp/first.mp3',
+          expect.stringMatching(REQUEST_PATH_PATTERN('/tmp/first.mp3')),
           expect.any(Buffer),
           'binary',
           expect.any(Function)
         )
         expect(mockPlayer.load).toHaveBeenCalledWith(
-          expect.objectContaining({ contentId: 'https://first.ngrok.io/text-mp3' }),
+          expect.objectContaining({ contentId: expect.stringMatching(REQUEST_URL_PATTERN('https://first.ngrok.io/text-mp3')) }),
           { autoplay: true },
           expect.any(Function)
         )
@@ -321,13 +344,13 @@ describe('google-home-notifier-2', () => {
           expect.any(Function)
         )
         expect(mockWriteFile).toHaveBeenCalledWith(
-          '/tmp/sample.mp3',
+          expect.stringMatching(REQUEST_PATH_PATTERN('/tmp/sample.mp3')),
           Buffer.from('dummy-audio'),
           'binary',
           expect.any(Function)
         )
         expect(mockPlayer.load).toHaveBeenCalledWith(
-          expect.objectContaining({ contentId: 'https://example.ngrok.io/text-mp3' }),
+          expect.objectContaining({ contentId: expect.stringMatching(REQUEST_URL_PATTERN('https://example.ngrok.io/text-mp3')) }),
           { autoplay: true },
           expect.any(Function)
         )
@@ -371,7 +394,7 @@ describe('google-home-notifier-2', () => {
       googlehome.ip('192.168.1.50')
       googlehome.notify('こんにちは', () => {
         expect(mockWriteFile).toHaveBeenCalledWith(
-          '/tmp/first.mp3',
+          expect.stringMatching(REQUEST_PATH_PATTERN('/tmp/first.mp3')),
           expect.any(Buffer),
           'binary',
           expect.any(Function)
@@ -395,7 +418,7 @@ describe('google-home-notifier-2', () => {
 
       googlehome.notify('こんにちは', () => {
         expect(mockPlayer.load).toHaveBeenCalledWith(
-          expect.objectContaining({ contentId: 'https://first.ngrok.io/text-mp3' }),
+          expect.objectContaining({ contentId: expect.stringMatching(REQUEST_URL_PATTERN('https://first.ngrok.io/text-mp3')) }),
           { autoplay: true },
           expect.any(Function)
         )
@@ -483,6 +506,125 @@ describe('google-home-notifier-2', () => {
 
       googlehome.ip('192.168.1.50')
       googlehome.play('http://example.com/audio.mp3', callback)
+    })
+  })
+
+  describe('同時実行されたnotify()同士の競合(#73)', () => {
+    test('2つのnotify()をほぼ同時に実行し、TTS callbackが任意の順序で完了しても、それぞれ異なるファイル/URLへ書き込まれ、対応するaudioContentと正しく対応し、両方のcallbackが正常に完了する', (done) => {
+      const synthCalls = []
+      mockSynthesizeSpeech.mockImplementation((request, cb) => {
+        synthCalls.push({ text: request.input.text, cb })
+      })
+
+      const writtenFiles = []
+      mockWriteFile.mockImplementation((path, data, encoding, cb) => {
+        writtenFiles.push({ path, data })
+        cb(null)
+      })
+
+      const loadedUrls = []
+      mockPlayer.load.mockImplementation((media, opts, cb) => {
+        loadedUrls.push(media.contentId)
+        cb(null)
+      })
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      const results = []
+      const finishIfDone = () => {
+        if (results.length !== 2) {
+          return
+        }
+
+        // 書き込み先ファイル・再生URLがそれぞれ異なること(同一ファイル/URLへの競合がないこと)
+        expect(writtenFiles.length).toBe(2)
+        expect(writtenFiles[0].path).not.toBe(writtenFiles[1].path)
+        expect(loadedUrls.length).toBe(2)
+        expect(loadedUrls[0]).not.toBe(loadedUrls[1])
+
+        const extractId = (value) => (value.match(/([0-9a-f]{32})/) || [])[1]
+
+        // 書き込まれたファイルのidと、Castへ渡されたURLのidが1件ずつ対応していること
+        // (完了順に処理されるため、writtenFiles[i]とloadedUrls[i]が同一リクエストの結果になる)
+        expect(extractId(writtenFiles[0].path)).toBe(extractId(loadedUrls[0]))
+        expect(extractId(writtenFiles[1].path)).toBe(extractId(loadedUrls[1]))
+        expect(extractId(writtenFiles[0].path)).not.toBe(extractId(writtenFiles[1].path))
+
+        // 各ファイルの中身が、そのリクエストのTTS audioContentと対応していること
+        // (通知Bを先に完了させたため、書き込み順は B, A の順になる)
+        expect(writtenFiles[0].data.toString()).toBe('audio-B')
+        expect(writtenFiles[1].data.toString()).toBe('audio-A')
+
+        expect(results).toEqual(expect.arrayContaining([
+          { label: 'A', res: 'Device notified' },
+          { label: 'B', res: 'Device notified' }
+        ]))
+
+        done()
+      }
+
+      googlehome.notify('通知A', (res) => {
+        results.push({ label: 'A', res })
+        finishIfDone()
+      })
+      googlehome.notify('通知B', (res) => {
+        results.push({ label: 'B', res })
+        finishIfDone()
+      })
+
+      expect(synthCalls.length).toBe(2)
+
+      // 任意の順序(ここではB→A)でTTS callbackが完了しても競合しないことを確認する
+      synthCalls[1].cb(null, { audioContent: Buffer.from('audio-B') })
+      synthCalls[0].cb(null, { audioContent: Buffer.from('audio-A') })
+    })
+  })
+
+  describe('一時MP3ファイルのcleanup(#73)', () => {
+    test('notify()成功直後は一時MP3ファイルを削除せず、猶予時間の経過後にcleanup(削除)する', (done) => {
+      jest.useFakeTimers()
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      googlehome.notify('こんにちは', (res) => {
+        expect(res).toBe('Device notified')
+        // Cast取得の猶予がある間はcleanupされていないこと
+        expect(mockUnlink).not.toHaveBeenCalled()
+
+        jest.advanceTimersByTime(CLEANUP_DELAY_MS)
+
+        expect(mockUnlink).toHaveBeenCalledTimes(1)
+        expect(mockUnlink).toHaveBeenCalledWith(
+          expect.stringMatching(REQUEST_PATH_PATTERN('/tmp/sample.mp3')),
+          expect.any(Function)
+        )
+        done()
+      })
+    })
+
+    test('cleanup(unlink)が失敗しても、既に完了しているnotify()のcallbackは再発火せず、正常な通知結果に影響しない', (done) => {
+      jest.useFakeTimers()
+      mockUnlink.mockImplementation((path, cb) => cb(new Error('cleanup failed')))
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      const callback = jest.fn()
+      googlehome.notify('こんにちは', callback)
+
+      expect(callback).toHaveBeenCalledTimes(1)
+      expect(callback).toHaveBeenCalledWith('Device notified')
+
+      jest.advanceTimersByTime(CLEANUP_DELAY_MS)
+
+      // cleanup失敗後もcallbackが再度呼ばれていないこと
+      expect(callback).toHaveBeenCalledTimes(1)
+      done()
     })
   })
 })

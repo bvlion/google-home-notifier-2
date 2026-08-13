@@ -9,6 +9,7 @@ const mdns = require('mdns')
 const browser = mdns.createBrowser(mdns.tcp('googlecast'))
 const fs = require('fs')
 const textToSpeech = require('@google-cloud/text-to-speech')
+const { CLEANUP_DELAY_MS, generateRequestId, resolveRequestMp3Path, appendRequestId } = require('./request-mp3')
 // Google Cloud クライアントライブラリの標準的な認証(Application Default Credentials)を利用する。
 // サービスアカウントJSONを使う場合は環境変数 GOOGLE_APPLICATION_CREDENTIALS にそのパスを設定する。
 const client = new textToSpeech.TextToSpeechClient()
@@ -81,6 +82,24 @@ const start = (target, callback, func) => {
   }
 }
 
+// cleanup(unlink)の成否はnotify()のcallbackへ影響させない。cleanupは既にCastへ渡した
+// callbackとは無関係の後始末であり、ここで発生したエラーがcallbackの二重発火や
+// 正常通知の失敗扱いに繋がらないよう、独立してログ出力のみ行う。
+const scheduleCleanup = (filePath) => {
+  // unref(): このタイマーの残存だけでプロセス終了を妨げないようにする
+  // (テスト実行時にJestプロセスがhandleし続けるのを防ぐ意味もある)。
+  const timer = setTimeout(() => {
+    fs.unlink(filePath, (err) => {
+      if (err && err.code !== 'ENOENT') {
+        console.error('ERROR:', err)
+      }
+    })
+  }, CLEANUP_DELAY_MS)
+  if (typeof timer.unref === 'function') {
+    timer.unref()
+  }
+}
+
 const getSpeechUrl = (text, host, settings, callback) => {
   const { vol, lang, voice, outputPath, playbackUrl } = settings
 
@@ -103,13 +122,20 @@ const getSpeechUrl = (text, host, settings, callback) => {
       return
     }
 
-    fs.writeFile(outputPath, response.audioContent, 'binary', err => {
+    // 複数のnotify()が同時に完了しても同一ファイル/同一URLへ書き込み・アクセスが
+    // 競合しないよう、TTSごとに一意なファイルパスと配信URLをここで都度生成する。
+    const requestId = generateRequestId()
+    const requestOutputPath = resolveRequestMp3Path(outputPath, requestId)
+    const requestPlaybackUrl = appendRequestId(playbackUrl, requestId)
+
+    fs.writeFile(requestOutputPath, response.audioContent, 'binary', err => {
       if (err) {
         console.error('ERROR:', err)
         callback('error')
         return
       }
-      onDeviceUp(host, playbackUrl, vol, (res) => {
+      scheduleCleanup(requestOutputPath)
+      onDeviceUp(host, requestPlaybackUrl, vol, (res) => {
         callback(res)
       })
    })

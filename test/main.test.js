@@ -22,8 +22,10 @@ const fs = require('fs')
 const net = require('net')
 const os = require('os')
 const path = require('path')
+const crypto = require('crypto')
 
 const { createNotifyApp, createMp3App, startMp3Server } = require('../main')
+const { resolveRequestMp3Path } = require('../request-mp3')
 
 const listen = (app) => new Promise((resolve) => {
   const server = app.listen(0, () => resolve(server))
@@ -177,6 +179,88 @@ describe('createMp3App() - MP3配信用app(公開範囲: ngrokへforwardする�
     const res = await fetch(`${baseUrl}/text-mp3`)
 
     expect(res.status).toBe(404)
+  })
+})
+
+describe('createMp3App() - リクエスト固有MP3の配信(#73: 同時に複数の一時MP3が存在していても対応するファイルだけを返す)', () => {
+  let server
+  let baseUrl
+  let mp3OutputPath
+  let idA
+  let idB
+  let pathA
+  let pathB
+
+  beforeEach(() => {
+    mp3OutputPath = path.join(os.tmpdir(), `main-test-${Date.now()}-${Math.random()}.mp3`)
+    fs.writeFileSync(mp3OutputPath, 'dummy-mp3-content')
+
+    idA = crypto.randomBytes(16).toString('hex')
+    idB = crypto.randomBytes(16).toString('hex')
+    pathA = resolveRequestMp3Path(mp3OutputPath, idA)
+    pathB = resolveRequestMp3Path(mp3OutputPath, idB)
+    fs.writeFileSync(pathA, 'content-A')
+    fs.writeFileSync(pathB, 'content-B')
+  })
+
+  afterEach(async () => {
+    await closeServer(server)
+    server = undefined
+    fs.rmSync(mp3OutputPath, { force: true })
+    fs.rmSync(pathA, { force: true })
+    fs.rmSync(pathB, { force: true })
+  })
+
+  const setUpApp = async () => {
+    const app = createMp3App({ mp3Url: '/text-mp3', mp3OutputPath })
+    server = await listen(app)
+    baseUrl = `http://localhost:${server.address().port}`
+  }
+
+  test('idAのURLはAのMP3を返し、idBのURLはBのMP3を返す', async () => {
+    await setUpApp()
+
+    const resA = await fetch(`${baseUrl}/text-mp3?id=${idA}`)
+    const resB = await fetch(`${baseUrl}/text-mp3?id=${idB}`)
+
+    expect(resA.status).toBe(200)
+    expect(await resA.text()).toBe('content-A')
+    expect(resB.status).toBe(200)
+    expect(await resB.text()).toBe('content-B')
+  })
+
+  test('存在しない(形式は正しい)idへのアクセスは404になる', async () => {
+    await setUpApp()
+    const missingId = crypto.randomBytes(16).toString('hex')
+
+    const res = await fetch(`${baseUrl}/text-mp3?id=${missingId}`)
+
+    expect(res.status).toBe(404)
+  })
+
+  test.each([
+    ['../../../etc/passwd'],
+    ['..%2f..%2fetc%2fpasswd'],
+    ['abc/../def'],
+    ['not-hex-id'],
+    [''],
+    ['A'.repeat(32)], // 大文字は許可されたhex形式ではない
+    ['0'.repeat(31)] // 桁数不足
+  ])('不正な形式のid "%s" はpath traversal等につながらず400エラーになる', async (badId) => {
+    await setUpApp()
+
+    const res = await fetch(`${baseUrl}/text-mp3?id=${encodeURIComponent(badId)}`)
+
+    expect(res.status).toBe(400)
+  })
+
+  test('id指定なしの場合は既存どおりmp3OutputPathを返す(後方互換)', async () => {
+    await setUpApp()
+
+    const res = await fetch(`${baseUrl}/text-mp3`)
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('dummy-mp3-content')
   })
 })
 

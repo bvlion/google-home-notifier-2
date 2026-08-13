@@ -87,19 +87,25 @@ const start = (target, callback, func) => {
 // mp3OutputPathを読んでいる側が書きかけの内容(破損・空)を読むことはない。複数のnotify()が
 // ほぼ同時に完了した場合、mp3OutputPathの内容がどちらの結果になるかは保証しないが、
 // 内容が破損することはなく、#73が問題にしていた「同一ファイルへの競合書き込み」は発生しない。
-// 失敗してもログ出力のみ行い、notify()のcallbackには影響させない。
-const updateLatestMp3 = (requestOutputPath, outputPath) => {
+// 元実装がfs.writeFile()完了後にのみCast処理へ進んでいたのと同じ順序を維持するため、
+// copyFile/renameが成功・失敗いずれで終わった場合もdone()を呼んでから後続処理(onDeviceUp)へ
+// 進めるようにする。ここでの失敗はログ出力のみ行い、notify()のcallbackには影響させない
+// (doneはあくまで「後続処理へ進んでよいタイミング」を伝えるだけで、成否は伝えない)。
+const updateLatestMp3 = (requestOutputPath, outputPath, done) => {
   const tmpPath = `${requestOutputPath}.tmp`
   fs.copyFile(requestOutputPath, tmpPath, (err) => {
     if (err) {
       console.error('ERROR:', err)
+      done()
       return
     }
     fs.rename(tmpPath, outputPath, (err) => {
       if (err) {
         console.error('ERROR:', err)
-        fs.unlink(tmpPath, () => {})
+        fs.unlink(tmpPath, () => done())
+        return
       }
+      done()
     })
   })
 }
@@ -138,12 +144,15 @@ const getSpeechUrl = (text, host, settings, callback) => {
         callback('error')
         return
       }
-      updateLatestMp3(requestOutputPath, outputPath)
       // Castが実際にGETしなかった場合の最後の砦としてのcleanupを予約する。
       // 実際のGETを契機にしたcleanupはMP3配信用server側でmarkServed()により行われる(request-mp3.js)。
       registerForCleanup(requestOutputPath)
-      onDeviceUp(host, requestPlaybackUrl, vol, (res) => {
-        callback(res)
+      // idなし互換用ファイル(mp3OutputPath)への反映が完了(成功・失敗いずれか)してから
+      // Cast処理へ進む。元実装がfs.writeFile()完了後にのみCast処理へ進んでいた順序を維持するため。
+      updateLatestMp3(requestOutputPath, outputPath, () => {
+        onDeviceUp(host, requestPlaybackUrl, vol, (res) => {
+          callback(res)
+        })
       })
    })
   })

@@ -739,7 +739,7 @@ describe('google-home-notifier-2', () => {
       })
     })
 
-    test('copyFile/renameが失敗しても、既に確定しているnotify()のcallbackには影響しない', (done) => {
+    test('copyFileが失敗しても、mp3OutputPathへの反映処理は完了扱いとなり後続のCast処理・notify callbackは実行される', (done) => {
       mockCopyFile.mockImplementation((src, dest, cb) => cb(new Error('copy failed')))
 
       googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
@@ -751,6 +751,98 @@ describe('google-home-notifier-2', () => {
         expect(mockRename).not.toHaveBeenCalled()
         done()
       })
+    })
+
+    test('renameが失敗しても、tmpファイルのcleanup後にCast処理・notify callbackは実行される', (done) => {
+      mockRename.mockImplementation((src, dest, cb) => cb(new Error('rename failed')))
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      googlehome.notify('こんにちは', (res) => {
+        expect(res).toBe('Device notified')
+        expect(mockUnlink).toHaveBeenCalledWith(expect.stringMatching(/\.tmp$/), expect.any(Function))
+        done()
+      })
+    })
+
+    // PR #75レビュー(2回目)対応: updateLatestMp3()はfs.copyFile()→fs.rename()という非同期処理のため、
+    // これらのcallbackが完了する前にCast処理(onDeviceUp)やnotify()のcallbackへ進んでしまうと、
+    // 元実装(fs.writeFile()完了後にのみCast処理へ進む)と順序が異なり、idなしGETがmp3OutputPathの
+    // rename完了前に古い内容を読みうるレースが残る。copyFile/renameのcallbackを意図的に保留し、
+    // それらが完了するまでCast接続・notify callbackが実行されないことを直接確認する。
+    test('mp3OutputPathへの反映(copyFile→rename)が完了するまで、Cast接続やnotify()のcallbackは実行されない(順序維持のレース防止)', () => {
+      let copyFileCallback
+      let renameCallback
+      mockCopyFile.mockImplementation((src, dest, cb) => {
+        copyFileCallback = cb
+      })
+      mockRename.mockImplementation((src, dest, cb) => {
+        renameCallback = cb
+      })
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      const callback = jest.fn()
+      googlehome.notify('こんにちは', callback)
+
+      // copyFile完了前: Cast接続もnotify callbackもまだ行われていないこと
+      expect(mockCopyFile).toHaveBeenCalledTimes(1)
+      expect(mockCastClient.connect).not.toHaveBeenCalled()
+      expect(callback).not.toHaveBeenCalled()
+
+      // copyFile成功 → rename開始。rename完了前もまだCast処理は始まらないこと
+      copyFileCallback(null)
+      expect(mockRename).toHaveBeenCalledTimes(1)
+      expect(mockCastClient.connect).not.toHaveBeenCalled()
+      expect(callback).not.toHaveBeenCalled()
+
+      // rename成功 → ここでようやくCast処理・notify callbackへ進むこと
+      renameCallback(null)
+
+      expect(mockCastClient.connect).toHaveBeenCalledTimes(1)
+      expect(callback).toHaveBeenCalledTimes(1)
+      expect(callback).toHaveBeenCalledWith('Device notified')
+    })
+
+    test('mp3OutputPathへの反映中にcopyFileが失敗しても、その時点でCast接続・notify callbackへ進む(hangしない)', () => {
+      let copyFileCallback
+      mockCopyFile.mockImplementation((src, dest, cb) => {
+        copyFileCallback = cb
+      })
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      const callback = jest.fn()
+      googlehome.notify('こんにちは', callback)
+
+      expect(mockCastClient.connect).not.toHaveBeenCalled()
+      expect(callback).not.toHaveBeenCalled()
+
+      copyFileCallback(new Error('copy failed'))
+
+      expect(mockRename).not.toHaveBeenCalled()
+      expect(mockCastClient.connect).toHaveBeenCalledTimes(1)
+      expect(callback).toHaveBeenCalledTimes(1)
+      expect(callback).toHaveBeenCalledWith('Device notified')
+    })
+
+    test('callbackは(copyFile/rename失敗時も含め)最大1回しか呼ばれない', () => {
+      mockCopyFile.mockImplementation((src, dest, cb) => cb(new Error('copy failed')))
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      const callback = jest.fn()
+      googlehome.notify('こんにちは', callback)
+
+      expect(callback).toHaveBeenCalledTimes(1)
     })
   })
 })

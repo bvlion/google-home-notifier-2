@@ -103,10 +103,20 @@ const runCleanup = (filePath) => {
   })
 }
 
-// notify()がrequest固有MP3の書き込みに成功した直後に呼び出す。
+// notify()がrequest固有MP3の書き込みに成功した直後、または起動時の孤児ファイル掃除
+// (cleanupOrphanedRequestFiles())が「まだ新しいので即削除しない」と判断したファイルに対して呼び出す。
 // Castが実際にGETしなかった場合の最後の砦として、MAX_PENDING_TTL_MS後には無条件でcleanupする。
 // 実際のGET契機のcleanupはmarkServed()が担う(このtimerより先に発火する想定)。
+// 同じfilePathへ複数回呼ばれても(呼び出し元での重複登録を想定した保険)、既存のtimerを
+// clearTimeout()してから登録し直すため、古いtimerがリークして早期・二重cleanupを起こすことはない。
 const registerForCleanup = (filePath) => {
+  const existing = pending.get(filePath)
+  if (existing) {
+    clearTimeout(existing.maxTimer)
+    if (existing.servedTimer) {
+      clearTimeout(existing.servedTimer)
+    }
+  }
   pending.set(filePath, {
     cleaned: false,
     servedTimer: null,
@@ -126,9 +136,14 @@ const markServed = (filePath) => {
   entry.servedTimer = unref(setTimeout(() => runCleanup(filePath), GET_GRACE_MS))
 }
 
-// mp3OutputPathの保存ディレクトリ内にある、このアプリが生成した命名規則に一致し、
-// かつ十分に古い(=プロセス再起動・クラッシュ等でcleanup timer=メモリ上のpendingが
-// 失われたとみなせる)ファイルだけを削除する。mp3OutputPath自体や無関係なファイルは対象にしない。
+// mp3OutputPathの保存ディレクトリ内にある、このアプリが生成した命名規則に一致するファイルを
+// 起動時に走査する。mp3OutputPath自体や無関係なファイルは対象にしない。
+// - 十分に古い(=プロセス再起動・クラッシュ等でcleanup timer=メモリ上のpendingが失われたとみなせる)
+//   ファイルは、その場で削除する。
+// - まだ新しい(再起動直前に生成された可能性がある)ファイルは即削除せず、代わりに
+//   registerForCleanup()で新プロセスのcleanup管理へ登録する。これにより、その後実際にGETされれば
+//   markServed()経由でGET_GRACE_MS後に、GETされなくてもMAX_PENDING_TTL_MS後に、最終的には必ず
+//   cleanupされる(「新しいので今は消さない」が「cleanup管理から永久に外れる」ことにはならない)。
 // createMp3App()の生成時(=起動時)に一度だけ呼び出す想定。
 const cleanupOrphanedRequestFiles = (mp3OutputPath, options = {}, done = () => {}) => {
   const minAgeMs = options.minAgeMs !== undefined ? options.minAgeMs : ORPHAN_MIN_AGE_MS
@@ -167,6 +182,8 @@ const cleanupOrphanedRequestFiles = (mp3OutputPath, options = {}, done = () => {
           return
         }
         if (Date.now() - stat.mtimeMs < minAgeMs) {
+          // 再起動直前に生成された可能性があるため即削除はしないが、cleanup管理からは外さない。
+          registerForCleanup(filePath)
           finishOne()
           return
         }

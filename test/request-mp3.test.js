@@ -32,6 +32,12 @@ describe('request-mp3.js', () => {
     return filePath
   }
 
+  // fake timerで発火させたsetTimeoutコールバック自体は同期的に実行されるが、その中で呼ぶ
+  // fs.unlink()は実ファイルシステムに対する非同期I/Oのため、コールバック完了は実イベントループの
+  // 後続tickで起こる。fake timerで期限を進めたあとreal timerへ戻し、1tick分だけ実時間で
+  // flushすることで、実際に削除が完了したかを確定的に検証する(長時間の実時間待機はしない)。
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 10))
+
   describe('generateRequestId() / isValidRequestId()', () => {
     test('generateRequestId()は32桁の16進数文字列を生成し、isValidRequestId()はそれを有効と判定する', () => {
       const id = requestMp3.generateRequestId()
@@ -101,12 +107,6 @@ describe('request-mp3.js', () => {
   })
 
   describe('registerForCleanup() / markServed() - cleanupのスケジューリング(PR #75レビュー対応)', () => {
-    // fake timerで発火させたsetTimeoutコールバック自体は同期的に実行されるが、その中で呼ぶ
-    // fs.unlink()は実ファイルシステムに対する非同期I/Oのため、コールバック完了は実イベントループの
-    // 後続tickで起こる。fake timerで期限を進めたあとreal timerへ戻し、1tick分だけ実時間で
-    // flushすることで、実際に削除が完了したかを確定的に検証する(60秒等の長時間の実時間待機はしない)。
-    const flush = () => new Promise((resolve) => setTimeout(resolve, 10))
-
     test('GETされない(markServed()されない)間は、最大保持時間(MAX_PENDING_TTL_MS)未満ではcleanupされない', () => {
       jest.useFakeTimers()
       const filePath = writeTrackedFile(path.join(os.tmpdir(), `pending-${Date.now()}.mp3`))
@@ -186,6 +186,31 @@ describe('request-mp3.js', () => {
 
       unlinkSpy.mockRestore()
     })
+
+    test('registerForCleanup()を同じfilePathへ複数回呼んでも、古いtimerがリークして早期・二重cleanupを起こさない(PR #75レビュー対応: 起動時cleanupからの再登録を想定した保険)', async () => {
+      jest.useFakeTimers()
+      const filePath = writeTrackedFile(path.join(os.tmpdir(), `double-register-${Date.now()}.mp3`))
+      const unlinkSpy = jest.spyOn(fs, 'unlink')
+
+      requestMp3.registerForCleanup(filePath)
+      jest.advanceTimersByTime(requestMp3.MAX_PENDING_TTL_MS / 2)
+
+      // 同じfilePathへ再登録(起動時cleanupが複数回走った場合等を想定した保険的な検証)
+      requestMp3.registerForCleanup(filePath)
+
+      // 最初の登録から数えたMAX_PENDING_TTL_MS相当が経過しても、再登録によって期限がリセットされて
+      // いるため、まだcleanupされていないこと(古いtimerが生き残って早期cleanupを起こさないこと)
+      jest.advanceTimersByTime(requestMp3.MAX_PENDING_TTL_MS / 2)
+      expect(unlinkSpy).not.toHaveBeenCalled()
+
+      // 再登録した時点から数えたMAX_PENDING_TTL_MSが経過すると、cleanupされること(1回だけ)
+      jest.advanceTimersByTime(requestMp3.MAX_PENDING_TTL_MS / 2)
+      jest.useRealTimers()
+      await flush()
+
+      expect(unlinkSpy).toHaveBeenCalledTimes(1)
+      unlinkSpy.mockRestore()
+    })
   })
 
   describe('cleanupOrphanedRequestFiles() - 起動時の孤児ファイル掃除(PR #75レビュー対応: プロセス再起動・クラッシュ後の孤児ファイル)', () => {
@@ -224,6 +249,82 @@ describe('request-mp3.js', () => {
         expect(fs.existsSync(freshPath)).toBe(true)
         done()
       })
+    })
+
+    // Codexレビュー(2026-08-14)対応: 起動時cleanupが「まだ新しいので今は削除しない」と判断した
+    // request固有MP3が、新プロセスのcleanup管理(pending)には登録されておらず、その後GETされても
+    // markServed()がno-opになり、GETされなくても二度と掃除されない(=永久に残り続ける)穴があった。
+    // cleanupOrphanedRequestFiles()が見つけた「まだ新しい」ファイルはregisterForCleanup()で
+    // 新プロセスのcleanup管理へ登録するようにしたため、以降は通常のrequest固有MP3と同じように
+    // GET契機(markServed)またはMAX_PENDING_TTL_MSで必ずcleanupされる。
+    test('再起動直後相当の新しいrequest固有MP3は、起動時cleanupでは即削除されないが、新プロセスのcleanup管理へ登録され、その後実際にGETされればGET_GRACE_MS後にcleanupされる', async () => {
+      jest.useFakeTimers()
+
+      const id = requestMp3.generateRequestId()
+      const freshPath = writeTrackedFile(requestMp3.resolveRequestMp3Path(mp3OutputPath, id), 'fresh')
+      writeTrackedFile(mp3OutputPath, 'latest')
+
+      await new Promise((resolve) => {
+        requestMp3.cleanupOrphanedRequestFiles(mp3OutputPath, { minAgeMs: 60000 }, resolve)
+      })
+
+      // 起動直後なので即削除されない
+      expect(fs.existsSync(freshPath)).toBe(true)
+
+      // その後、新プロセスでこのファイルへ実際にGETがあったことを模す(main.jsのmarkServed()相当)
+      requestMp3.markServed(freshPath)
+
+      jest.advanceTimersByTime(requestMp3.GET_GRACE_MS - 1)
+      expect(fs.existsSync(freshPath)).toBe(true)
+
+      jest.advanceTimersByTime(1)
+      jest.useRealTimers()
+      await flush()
+
+      expect(fs.existsSync(freshPath)).toBe(false)
+    })
+
+    test('再起動直後相当の新しいrequest固有MP3がその後GETされなくても、最大保持時間(MAX_PENDING_TTL_MS)経過後には最終的にcleanupされ、永久には残らない', async () => {
+      jest.useFakeTimers()
+
+      const id = requestMp3.generateRequestId()
+      const freshPath = writeTrackedFile(requestMp3.resolveRequestMp3Path(mp3OutputPath, id), 'fresh')
+      writeTrackedFile(mp3OutputPath, 'latest')
+
+      await new Promise((resolve) => {
+        requestMp3.cleanupOrphanedRequestFiles(mp3OutputPath, { minAgeMs: 60000 }, resolve)
+      })
+
+      expect(fs.existsSync(freshPath)).toBe(true)
+
+      jest.advanceTimersByTime(requestMp3.MAX_PENDING_TTL_MS - 1)
+      expect(fs.existsSync(freshPath)).toBe(true)
+
+      jest.advanceTimersByTime(1)
+      jest.useRealTimers()
+      await flush()
+
+      expect(fs.existsSync(freshPath)).toBe(false)
+    })
+
+    test('再起動直後相当の新しい一時ファイル(<request固有ファイル>.tmp)も、起動時cleanupでは即削除されないが、新プロセスのcleanup管理へ登録され、最終的にはcleanupされる(GETされない前提のため最大保持時間経由)', async () => {
+      jest.useFakeTimers()
+
+      const id = requestMp3.generateRequestId()
+      const freshTmpPath = writeTrackedFile(`${requestMp3.resolveRequestMp3Path(mp3OutputPath, id)}.tmp`, 'fresh-tmp')
+      writeTrackedFile(mp3OutputPath, 'latest')
+
+      await new Promise((resolve) => {
+        requestMp3.cleanupOrphanedRequestFiles(mp3OutputPath, { minAgeMs: 60000 }, resolve)
+      })
+
+      expect(fs.existsSync(freshTmpPath)).toBe(true)
+
+      jest.advanceTimersByTime(requestMp3.MAX_PENDING_TTL_MS)
+      jest.useRealTimers()
+      await flush()
+
+      expect(fs.existsSync(freshTmpPath)).toBe(false)
     })
 
     test('mp3OutputPath自体は削除しない', (done) => {

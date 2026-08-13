@@ -98,7 +98,7 @@ $ cp .env.example .env
 
 ### サンプルrunnerとカスタムrunner
 
-`google-home-notifier-2.js` がコアライブラリで、通知先デバイスは `googlehome.ip(ip)` をリクエストごとに呼び出すことで、1プロセス内でも都度切り替えられます。
+`google-home-notifier-2.js` がコアライブラリで、通知先デバイスは `googlehome.ip(ip)` をリクエストごとに呼び出すことで、1プロセス内でも都度切り替えられます（実運用ではこのIP明示指定が中心です）。IPを指定しない場合はmDNSでデバイスを探索しますが、その際は事前に `googlehome.device(name)` でデバイス名（mDNSサービス名に含まれる名前）を設定しておく必要があります。
 
 - リポジトリ直下の `main.js`
   - 固定1台のGoogle Home/Castデバイスにのみ通知する単純な利用例（sample runner）です。

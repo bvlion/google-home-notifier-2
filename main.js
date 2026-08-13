@@ -31,18 +31,25 @@ const createNotifyApp = ({ notifyUrl, googleHomeIp, language, voice, mp3OutputPa
           const mp3_url = text
           googlehome.play(mp3_url, (notifyRes) => {
             console.log(notifyRes)
-            res.send('「' + mp3_url + '」の音楽を再生しました。\n')
+            if (notifyRes === 'error') {
+              res.status(500).send('「' + mp3_url + '」の再生に失敗しました。\n')
+            } else {
+              res.send('「' + mp3_url + '」の音楽を再生しました。\n')
+            }
           })
         } else {
           googlehome.notify(text, (notifyRes) => {
             console.log(notifyRes)
-            res.send('「' + text + '」と言いました。\n')
+            if (notifyRes === 'error') {
+              res.status(500).send('「' + text + '」の通知に失敗しました。\n')
+            } else {
+              res.send('「' + text + '」と言いました。\n')
+            }
           })
         }
       } catch(err) {
         console.log(err)
-        res.sendStatus(500)
-        res.send(err)
+        res.status(500).send(String(err))
       }
     } else {
       res.send('Please GET "text=こんにちは！"')
@@ -57,9 +64,14 @@ const createMp3App = ({ mp3Url, mp3OutputPath }) => {
   const app = express()
 
   app.get(mp3Url, (_, res) =>
-    fs.readFile(mp3OutputPath, (_, data) =>
-      res.status(200).send(new Buffer.from(data, 'binary'))
-    )
+    fs.readFile(mp3OutputPath, (err, data) => {
+      if (err) {
+        console.error('ERROR:', err)
+        res.sendStatus(err.code === 'ENOENT' ? 404 : 500)
+        return
+      }
+      res.status(200).send(Buffer.from(data, 'binary'))
+    })
   )
 
   return app
@@ -67,16 +79,26 @@ const createMp3App = ({ mp3Url, mp3OutputPath }) => {
 
 // MP3配信用appをlistenし、ngrokをそのポートだけへforwardする。
 // ngrok URLの固定化はせず、起動のたびに取得したURL + mp3Urlをgooglehome.ngrokUrl()へ設定する(既存挙動を維持)。
+// listen失敗・ngrok.forward失敗のいずれもPromiseをrejectし、呼び出し元が処理完了を認識できるようにする。
 const startMp3Server = (mp3App, { mp3ServerPort, mp3Url, ngrokAuthtoken }) =>
-  new Promise((resolve) => {
-    const server = mp3App.listen(mp3ServerPort, () => {
+  new Promise((resolve, reject) => {
+    const server = mp3App.listen(mp3ServerPort)
+
+    server.once('error', reject)
+
+    server.once('listening', () => {
       (async () => {
-        const listener = await ngrok.forward({ addr: mp3ServerPort, authtoken: ngrokAuthtoken })
-        const url = listener.url()
-        console.log('MP3配信用サーバー起動: http://localhost:' + mp3ServerPort + mp3Url)
-        console.log('ngrok Endpoints:' + url)
-        googlehome.ngrokUrl(url + mp3Url)
-        resolve(server)
+        try {
+          const listener = await ngrok.forward({ addr: mp3ServerPort, authtoken: ngrokAuthtoken })
+          const url = listener.url()
+          console.log('MP3配信用サーバー起動: http://localhost:' + mp3ServerPort + mp3Url)
+          console.log('ngrok Endpoints:' + url)
+          googlehome.ngrokUrl(url + mp3Url)
+          resolve(server)
+        } catch (err) {
+          server.close()
+          reject(err)
+        }
       })()
     })
   })
@@ -108,7 +130,12 @@ const start = () => {
     console.log('curl -X POST -d "text=こんにちは" http://localhost:' + serverPort + notifyUrl)
   })
 
-  startMp3Server(mp3App, { mp3ServerPort, mp3Url, ngrokAuthtoken })
+  // listen失敗・ngrok.forward失敗時にUnhandled rejectionのままプロセスが不定状態にならないよう、
+  // ここで確実に処理してプロセスを終了する。
+  startMp3Server(mp3App, { mp3ServerPort, mp3Url, ngrokAuthtoken }).catch((err) => {
+    console.error('MP3配信用サーバーの起動に失敗しました:', err)
+    process.exit(1)
+  })
 }
 
 if (require.main === module) {
@@ -118,3 +145,4 @@ if (require.main === module) {
 exports.createNotifyApp = createNotifyApp
 exports.createMp3App = createMp3App
 exports.startMp3Server = startMp3Server
+exports.start = start

@@ -73,7 +73,17 @@ const appendRequestId = (url, id) => {
   return `${url}${separator}id=${id}`
 }
 
-// filePath -> { cleaned, maxTimer, servedTimer }
+// fs.unlink()がEBUSY等で一時的に失敗しただけでcleanup管理を諦めてpendingから外してしまうと、
+// ファイルは残ったままserved timer/max timerのどちらからも二度とretryされなくなり、次回プロセス
+// 再起動時のcleanupOrphanedRequestFiles()まで放置されてしまう。そのため、成功またはENOENT
+// (既に存在しない=cleanup済みと同等)の場合にのみpendingからentryを削除し、それ以外のエラーでは
+// 有限回数(UNLINK_RETRY_LIMIT)・一定間隔(UNLINK_RETRY_DELAY_MS)でretryする。
+// 無限retryにはしない: retry上限に達した場合はこのプロセス内での自動retryを諦めるが、
+// 次回起動時のcleanupOrphanedRequestFiles()が最終的な安全網になる。
+const UNLINK_RETRY_LIMIT = 3
+const UNLINK_RETRY_DELAY_MS = 5000
+
+// filePath -> { cleaned, cleaning, maxTimer, servedTimer, retryTimer }
 // request固有MP3ごとのcleanup状態を保持する。プロセス内メモリのみで管理するため、
 // プロセス再起動・クラッシュ時はここでの状態は失われる(その場合の掃除はcleanupOrphanedRequestFiles()が担う)。
 const pending = new Map()
@@ -85,22 +95,46 @@ const unref = (timer) => {
   return timer
 }
 
+// entry.cleaning: fs.unlink()の実行中(retry待機中も含む)であることを示すフラグ。
+// served timerとmax timerがほぼ同時に発火してrunCleanup()が二重に呼ばれても、cleaning中は
+// 何もしないことで並行unlink・二重cleanupを防ぐ。retryを使い切って諦めた場合はfalseへ戻すため、
+// (現状の呼び出し経路では通常発生しないが)将来何らかのきっかけで再度cleanupが試みられた場合にも
+// retry可能な状態のままになる。
+const attemptUnlink = (filePath, attempt) => {
+  fs.unlink(filePath, (err) => {
+    const entry = pending.get(filePath)
+    if (!entry) {
+      return
+    }
+    if (!err || err.code === 'ENOENT') {
+      entry.cleaned = true
+      entry.cleaning = false
+      pending.delete(filePath)
+      return
+    }
+
+    console.error('ERROR:', err)
+
+    if (attempt >= UNLINK_RETRY_LIMIT) {
+      entry.cleaning = false
+      return
+    }
+
+    entry.retryTimer = unref(setTimeout(() => attemptUnlink(filePath, attempt + 1), UNLINK_RETRY_DELAY_MS))
+  })
+}
+
 const runCleanup = (filePath) => {
   const entry = pending.get(filePath)
-  if (!entry || entry.cleaned) {
+  if (!entry || entry.cleaned || entry.cleaning) {
     return
   }
-  entry.cleaned = true
+  entry.cleaning = true
   clearTimeout(entry.maxTimer)
   if (entry.servedTimer) {
     clearTimeout(entry.servedTimer)
   }
-  pending.delete(filePath)
-  fs.unlink(filePath, (err) => {
-    if (err && err.code !== 'ENOENT') {
-      console.error('ERROR:', err)
-    }
-  })
+  attemptUnlink(filePath, 1)
 }
 
 // notify()がrequest固有MP3の書き込みに成功した直後、または起動時の孤児ファイル掃除
@@ -116,10 +150,15 @@ const registerForCleanup = (filePath) => {
     if (existing.servedTimer) {
       clearTimeout(existing.servedTimer)
     }
+    if (existing.retryTimer) {
+      clearTimeout(existing.retryTimer)
+    }
   }
   pending.set(filePath, {
     cleaned: false,
+    cleaning: false,
     servedTimer: null,
+    retryTimer: null,
     maxTimer: unref(setTimeout(() => runCleanup(filePath), MAX_PENDING_TTL_MS))
   })
 }
@@ -202,6 +241,8 @@ exports.REQUEST_ID_PATTERN = REQUEST_ID_PATTERN
 exports.GET_GRACE_MS = GET_GRACE_MS
 exports.MAX_PENDING_TTL_MS = MAX_PENDING_TTL_MS
 exports.ORPHAN_MIN_AGE_MS = ORPHAN_MIN_AGE_MS
+exports.UNLINK_RETRY_LIMIT = UNLINK_RETRY_LIMIT
+exports.UNLINK_RETRY_DELAY_MS = UNLINK_RETRY_DELAY_MS
 exports.generateRequestId = generateRequestId
 exports.isValidRequestId = isValidRequestId
 exports.resolveRequestMp3Path = resolveRequestMp3Path

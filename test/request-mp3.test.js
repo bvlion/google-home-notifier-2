@@ -211,6 +211,131 @@ describe('request-mp3.js', () => {
       expect(unlinkSpy).toHaveBeenCalledTimes(1)
       unlinkSpy.mockRestore()
     })
+
+    // Codexレビュー(2026-08-14, discussion_r3779915767)対応: fs.unlink()がEBUSY等で一時的に
+    // 失敗しただけでpendingからentryを削除すると、served timer/max timerのどちらもリセットされて
+    // いるため二度とretryされず、次回プロセス再起動時のcleanupOrphanedRequestFiles()まで
+    // ファイルが残り続ける穴があった。成功またはENOENTの場合にのみpendingから削除し、
+    // それ以外は有限回数(UNLINK_RETRY_LIMIT)・一定間隔(UNLINK_RETRY_DELAY_MS)でretryするようにした。
+    describe('fs.unlink()失敗時のbounded retry(PR #75レビュー対応)', () => {
+      test('fs.unlink()が一時的に失敗しても、bounded retryのうちに成功すれば最終的にcleanupされる', async () => {
+        jest.useFakeTimers()
+        const filePath = writeTrackedFile(path.join(os.tmpdir(), `retry-success-${Date.now()}.mp3`))
+        let callCount = 0
+        const unlinkSpy = jest.spyOn(fs, 'unlink').mockImplementation((p, cb) => {
+          callCount += 1
+          if (callCount < 3) {
+            const err = new Error('resource busy or locked')
+            err.code = 'EBUSY'
+            cb(err)
+            return
+          }
+          fs.unlinkSync(p)
+          cb(null)
+        })
+
+        requestMp3.registerForCleanup(filePath)
+        requestMp3.markServed(filePath)
+
+        // 1回目(GET_GRACE_MS経過時点): 失敗
+        jest.advanceTimersByTime(requestMp3.GET_GRACE_MS)
+        expect(unlinkSpy).toHaveBeenCalledTimes(1)
+        expect(fs.existsSync(filePath)).toBe(true)
+
+        // 2回目(1回目の失敗からUNLINK_RETRY_DELAY_MS後): 失敗
+        jest.advanceTimersByTime(requestMp3.UNLINK_RETRY_DELAY_MS)
+        expect(unlinkSpy).toHaveBeenCalledTimes(2)
+        expect(fs.existsSync(filePath)).toBe(true)
+
+        // 3回目: 成功
+        jest.advanceTimersByTime(requestMp3.UNLINK_RETRY_DELAY_MS)
+        expect(unlinkSpy).toHaveBeenCalledTimes(3)
+
+        jest.useRealTimers()
+        await flush()
+
+        expect(fs.existsSync(filePath)).toBe(false)
+        unlinkSpy.mockRestore()
+      })
+
+      test('fs.unlink()が繰り返し失敗する場合、無限retryはせずUNLINK_RETRY_LIMIT回で諦める(以後は次回起動時の孤児ファイル掃除に委ねる)', () => {
+        jest.useFakeTimers()
+        const filePath = writeTrackedFile(path.join(os.tmpdir(), `retry-exhausted-${Date.now()}.mp3`))
+        const unlinkSpy = jest.spyOn(fs, 'unlink').mockImplementation((p, cb) => {
+          const err = new Error('resource busy or locked')
+          err.code = 'EBUSY'
+          cb(err)
+        })
+
+        requestMp3.registerForCleanup(filePath)
+        requestMp3.markServed(filePath)
+
+        jest.advanceTimersByTime(requestMp3.GET_GRACE_MS)
+        jest.advanceTimersByTime(requestMp3.UNLINK_RETRY_DELAY_MS * (requestMp3.UNLINK_RETRY_LIMIT - 1))
+
+        expect(unlinkSpy).toHaveBeenCalledTimes(requestMp3.UNLINK_RETRY_LIMIT)
+
+        // retry上限後、さらに時間が経過しても追加のfs.unlink()呼び出しは発生しない(無限retryにしない)
+        jest.advanceTimersByTime(requestMp3.UNLINK_RETRY_DELAY_MS * 10)
+        expect(unlinkSpy).toHaveBeenCalledTimes(requestMp3.UNLINK_RETRY_LIMIT)
+        expect(fs.existsSync(filePath)).toBe(true)
+
+        unlinkSpy.mockRestore()
+      })
+
+      test('fs.unlink()がENOENT(既に存在しない)を返した場合は成功扱いとなり、retryせず即cleanup完了とする', async () => {
+        jest.useFakeTimers()
+        const filePath = writeTrackedFile(path.join(os.tmpdir(), `retry-enoent-${Date.now()}.mp3`))
+        fs.rmSync(filePath, { force: true }) // ファイルを先に消しておき、ENOENTを再現する
+        const unlinkSpy = jest.spyOn(fs, 'unlink')
+
+        requestMp3.registerForCleanup(filePath)
+        requestMp3.markServed(filePath)
+
+        jest.advanceTimersByTime(requestMp3.GET_GRACE_MS)
+        jest.useRealTimers()
+        await flush()
+
+        expect(unlinkSpy).toHaveBeenCalledTimes(1)
+
+        // ENOENTはretry対象ではないため、さらに時間が経過しても追加呼び出しはない
+        jest.useFakeTimers()
+        jest.advanceTimersByTime(requestMp3.UNLINK_RETRY_DELAY_MS * requestMp3.UNLINK_RETRY_LIMIT)
+        expect(unlinkSpy).toHaveBeenCalledTimes(1)
+
+        unlinkSpy.mockRestore()
+      })
+
+      test('fs.unlink()の完了(callback)を待っている間に再度markServed()が呼ばれても、二重にfs.unlink()が呼ばれない(多重cleanup防止)', async () => {
+        jest.useFakeTimers()
+        const filePath = writeTrackedFile(path.join(os.tmpdir(), `no-double-unlink-${Date.now()}.mp3`))
+        let releaseUnlink
+        const unlinkSpy = jest.spyOn(fs, 'unlink').mockImplementation((p, cb) => {
+          releaseUnlink = () => {
+            fs.unlinkSync(p)
+            cb(null)
+          }
+        })
+
+        requestMp3.registerForCleanup(filePath)
+        requestMp3.markServed(filePath)
+
+        jest.advanceTimersByTime(requestMp3.GET_GRACE_MS)
+        expect(unlinkSpy).toHaveBeenCalledTimes(1)
+
+        // fs.unlink()のcallbackが完了する前(実行中)に、再度markServed()が呼ばれても
+        // 二重にfs.unlink()が呼ばれないこと
+        requestMp3.markServed(filePath)
+        expect(unlinkSpy).toHaveBeenCalledTimes(1)
+
+        releaseUnlink()
+        jest.useRealTimers()
+        await flush()
+
+        expect(fs.existsSync(filePath)).toBe(false)
+        unlinkSpy.mockRestore()
+      })
+    })
   })
 
   describe('cleanupOrphanedRequestFiles() - 起動時の孤児ファイル掃除(PR #75レビュー対応: プロセス再起動・クラッシュ後の孤児ファイル)', () => {

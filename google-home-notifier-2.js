@@ -9,7 +9,7 @@ const mdns = require('mdns')
 const browser = mdns.createBrowser(mdns.tcp('googlecast'))
 const fs = require('fs')
 const textToSpeech = require('@google-cloud/text-to-speech')
-const { CLEANUP_DELAY_MS, generateRequestId, resolveRequestMp3Path, appendRequestId } = require('./request-mp3')
+const { generateRequestId, resolveRequestMp3Path, appendRequestId, registerForCleanup } = require('./request-mp3')
 // Google Cloud クライアントライブラリの標準的な認証(Application Default Credentials)を利用する。
 // サービスアカウントJSONを使う場合は環境変数 GOOGLE_APPLICATION_CREDENTIALS にそのパスを設定する。
 const client = new textToSpeech.TextToSpeechClient()
@@ -82,22 +82,26 @@ const start = (target, callback, func) => {
   }
 }
 
-// cleanup(unlink)の成否はnotify()のcallbackへ影響させない。cleanupは既にCastへ渡した
-// callbackとは無関係の後始末であり、ここで発生したエラーがcallbackの二重発火や
-// 正常通知の失敗扱いに繋がらないよう、独立してログ出力のみ行う。
-const scheduleCleanup = (filePath) => {
-  // unref(): このタイマーの残存だけでプロセス終了を妨げないようにする
-  // (テスト実行時にJestプロセスがhandleし続けるのを防ぐ意味もある)。
-  const timer = setTimeout(() => {
-    fs.unlink(filePath, (err) => {
-      if (err && err.code !== 'ENOENT') {
+// idなしでの GET /text-mp3(従来からの利用方法)向けに、request固有MP3の内容を
+// mp3OutputPath自体にも反映する。fs.rename()によるディレクトリエントリの置き換えはatomicなため、
+// mp3OutputPathを読んでいる側が書きかけの内容(破損・空)を読むことはない。複数のnotify()が
+// ほぼ同時に完了した場合、mp3OutputPathの内容がどちらの結果になるかは保証しないが、
+// 内容が破損することはなく、#73が問題にしていた「同一ファイルへの競合書き込み」は発生しない。
+// 失敗してもログ出力のみ行い、notify()のcallbackには影響させない。
+const updateLatestMp3 = (requestOutputPath, outputPath) => {
+  const tmpPath = `${requestOutputPath}.tmp`
+  fs.copyFile(requestOutputPath, tmpPath, (err) => {
+    if (err) {
+      console.error('ERROR:', err)
+      return
+    }
+    fs.rename(tmpPath, outputPath, (err) => {
+      if (err) {
         console.error('ERROR:', err)
+        fs.unlink(tmpPath, () => {})
       }
     })
-  }, CLEANUP_DELAY_MS)
-  if (typeof timer.unref === 'function') {
-    timer.unref()
-  }
+  })
 }
 
 const getSpeechUrl = (text, host, settings, callback) => {
@@ -134,7 +138,10 @@ const getSpeechUrl = (text, host, settings, callback) => {
         callback('error')
         return
       }
-      scheduleCleanup(requestOutputPath)
+      updateLatestMp3(requestOutputPath, outputPath)
+      // Castが実際にGETしなかった場合の最後の砦としてのcleanupを予約する。
+      // 実際のGETを契機にしたcleanupはMP3配信用server側でmarkServed()により行われる(request-mp3.js)。
+      registerForCleanup(requestOutputPath)
       onDeviceUp(host, requestPlaybackUrl, vol, (res) => {
         callback(res)
       })

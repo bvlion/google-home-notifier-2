@@ -5,8 +5,8 @@
 
 const Client = require('castv2-client').Client
 const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver
-const mdns = require('mdns')
-const browser = mdns.createBrowser(mdns.tcp('googlecast'))
+const { createGoogleCastBrowser } = require('./mdns-browser')
+const browser = createGoogleCastBrowser()
 const fs = require('fs')
 const textToSpeech = require('@google-cloud/text-to-speech')
 const { generateRequestId, resolveRequestMp3Path, appendRequestId, registerForCleanup } = require('./request-mp3')
@@ -63,7 +63,7 @@ const start = (target, callback, func) => {
 
   if (!deviceAddress) {
     browser.start()
-    browser.on('serviceUp', (service) => {
+    browser.on('up', (service) => {
       console.log('Device "%s" at %s:%d', service.name, service.addresses[0], service.port)
       if (service.name.includes(deviceName.replace(' ', '-'))) {
         deviceAddress = service.addresses[0]

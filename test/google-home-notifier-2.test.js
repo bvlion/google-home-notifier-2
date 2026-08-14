@@ -9,10 +9,9 @@ const mockBrowser = {
   on: jest.fn()
 }
 
-jest.mock('mdns', () => ({
-  createBrowser: jest.fn(() => mockBrowser),
-  tcp: jest.fn(() => 'tcp')
-}), { virtual: true })
+jest.mock('../mdns-browser', () => ({
+  createGoogleCastBrowser: jest.fn(() => mockBrowser)
+}))
 
 const mockCastClient = {
   connect: jest.fn(),
@@ -145,7 +144,7 @@ describe('google-home-notifier-2', () => {
     test('IP未指定時、device()で設定した名前を含むmDNSサービスが見つかったデバイスへ接続する(派生元にあった公開APIの復元)', (done) => {
       let serviceUpHandler
       mockBrowser.on.mockImplementation((event, handler) => {
-        if (event === 'serviceUp') {
+        if (event === 'up') {
           serviceUpHandler = handler
         }
       })
@@ -168,7 +167,7 @@ describe('google-home-notifier-2', () => {
     test('device()で設定した名前を含まないmDNSサービスは無視され、探索を停止しない', () => {
       let serviceUpHandler
       mockBrowser.on.mockImplementation((event, handler) => {
-        if (event === 'serviceUp') {
+        if (event === 'up') {
           serviceUpHandler = handler
         }
       })
@@ -189,7 +188,7 @@ describe('google-home-notifier-2', () => {
     test('対象外デバイスが先にserviceUpしても探索を継続し、後から見つかった対象デバイスへ接続する(複数デバイス環境での探索打ち切り防止)', (done) => {
       let serviceUpHandler
       mockBrowser.on.mockImplementation((event, handler) => {
-        if (event === 'serviceUp') {
+        if (event === 'up') {
           serviceUpHandler = handler
         }
       })
@@ -223,7 +222,7 @@ describe('google-home-notifier-2', () => {
     test('mDNS探索中に別リクエストがsetUp()/ngrokUrl()を呼び出しても、notify()呼び出し時点の設定値が使用される(並行リクエストによる上書き防止)', (done) => {
       let serviceUpHandler
       mockBrowser.on.mockImplementation((event, handler) => {
-        if (event === 'serviceUp') {
+        if (event === 'up') {
           serviceUpHandler = handler
         }
       })

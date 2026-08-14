@@ -3,7 +3,8 @@ updates:
   - package-ecosystem: "npm"
     directory: "/"
     # 家庭内Raspberry Piで継続稼働する小規模OSSのため、PR数を抑えつつ
-    # patch/minorは自動グルーピングし、major/security updateだけ個別に扱う。
+    # patch/minorのversion updateは自動グルーピングし、major version update
+    # は個別に扱う。security updateの運用はこのPRでは変更しない。
     schedule:
       interval: "weekly"
       time: "09:00"
@@ -19,6 +20,7 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    # security update(脆弱性アラート起点のPR)はDependabotの仕様上、
-    # 上記scheduleやgroupsの対象外(version updates専用)であり、
-    # 検出され次第、個別PRとして即時作成される。
+    # 上記のschedule(interval: weekly)およびnpm-minor-patch groupは
+    # applies-to: version-updates であり、security updateには適用されない。
+    # security updatesの作成・grouping方針(Repository/Organization側の
+    # Grouped security updates設定を含む)は、このPRでは変更していない。

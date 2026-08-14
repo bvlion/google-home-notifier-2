@@ -6,7 +6,6 @@
 const Client = require('castv2-client').Client
 const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver
 const { createGoogleCastBrowser } = require('./mdns-browser')
-const browser = createGoogleCastBrowser()
 const fs = require('fs')
 const textToSpeech = require('@google-cloud/text-to-speech')
 const { generateRequestId, resolveRequestMp3Path, appendRequestId, registerForCleanup } = require('./request-mp3')
@@ -62,14 +61,23 @@ const start = (target, callback, func) => {
   }
 
   if (!deviceAddress) {
-    browser.start()
-    browser.on('up', (service) => {
+    // createGoogleCastBrowser(onUp)はbonjour-serviceのfind(opts, onUp)を経由し、onUpを探索
+    // 開始より先に登録してから探索を開始する(mdns-browser.js参照)。そのため、ここで
+    // browser.on('up', ...)を後から呼び出す形にはしない(listener登録前に届いたserviceを
+    // 取りこぼすと、その後のbrowser.start()相当は既に開始済みで何もしないno-opになるため)。
+    // onUpがcreateGoogleCastBrowser()の呼び出し中に同期的に発火しても currentBrowser 未代入で
+    // 例外にならないよう、宣言と代入を分けている(実際のbonjour-serviceはUDP応答を待つため
+    // 常に非同期にしか発火しない)。
+    let currentBrowser
+    currentBrowser = createGoogleCastBrowser((service) => {
       console.log('Device "%s" at %s:%d', service.name, service.addresses[0], service.port)
       if (service.name.includes(deviceName.replace(' ', '-'))) {
         deviceAddress = service.addresses[0]
         // 対象デバイスが見つかった場合のみ探索を終了する。対象外デバイスのserviceUpでは
         // 探索を継続しないと、対象デバイスが後から見つかるケースを取りこぼす。
-        browser.stop()
+        if (currentBrowser) {
+          currentBrowser.stop()
+        }
         func(target, deviceAddress, settings, (res) => {
           callback(res)
         })

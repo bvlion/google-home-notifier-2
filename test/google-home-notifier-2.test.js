@@ -3,14 +3,18 @@
 // Google Home 実機・Google Cloud Text-to-Speech・mDNS ディスカバリへの実接続を避けるため、
 // 外部依存はすべて mock/stub に差し替える。
 
+// createGoogleCastBrowser(onUp)は、bonjour-serviceのfind(opts, onUp)にあわせて
+// onUpをコールバック引数として受け取り、探索を開始済みのbrowser(start()/on()相当は
+// 呼び出し側で行わない)を返す。テスト側はmockImplementationで渡されたonUpを捕捉し、
+// 任意のタイミングでservice発見を模擬する(mdns-browser.js / google-home-notifier-2.js参照)。
 const mockBrowser = {
-  start: jest.fn(),
-  stop: jest.fn(),
-  on: jest.fn()
+  stop: jest.fn()
 }
 
+const mockCreateGoogleCastBrowser = jest.fn(() => mockBrowser)
+
 jest.mock('../mdns-browser', () => ({
-  createGoogleCastBrowser: jest.fn(() => mockBrowser)
+  createGoogleCastBrowser: mockCreateGoogleCastBrowser
 }))
 
 const mockCastClient = {
@@ -117,7 +121,7 @@ describe('google-home-notifier-2', () => {
       googlehome.ip('192.168.1.50')
 
       googlehome.play('http://example.com/audio.mp3', () => {
-        expect(mockBrowser.start).not.toHaveBeenCalled()
+        expect(mockCreateGoogleCastBrowser).not.toHaveBeenCalled()
         expect(mockCastClient.connect).toHaveBeenCalledWith('192.168.1.50', expect.any(Function))
         done()
       })
@@ -142,11 +146,10 @@ describe('google-home-notifier-2', () => {
 
   describe('device()', () => {
     test('IP未指定時、device()で設定した名前を含むmDNSサービスが見つかったデバイスへ接続する(派生元にあった公開APIの復元)', (done) => {
-      let serviceUpHandler
-      mockBrowser.on.mockImplementation((event, handler) => {
-        if (event === 'up') {
-          serviceUpHandler = handler
-        }
+      let onUp
+      mockCreateGoogleCastBrowser.mockImplementation((handler) => {
+        onUp = handler
+        return mockBrowser
       })
 
       googlehome.device('Living Room')
@@ -156,8 +159,8 @@ describe('google-home-notifier-2', () => {
         done()
       })
 
-      expect(mockBrowser.start).toHaveBeenCalled()
-      serviceUpHandler({
+      expect(mockCreateGoogleCastBrowser).toHaveBeenCalledWith(expect.any(Function))
+      onUp({
         name: 'Living-Room-ABCD',
         addresses: ['192.168.1.77'],
         port: 8009
@@ -165,17 +168,16 @@ describe('google-home-notifier-2', () => {
     })
 
     test('device()で設定した名前を含まないmDNSサービスは無視され、探索を停止しない', () => {
-      let serviceUpHandler
-      mockBrowser.on.mockImplementation((event, handler) => {
-        if (event === 'up') {
-          serviceUpHandler = handler
-        }
+      let onUp
+      mockCreateGoogleCastBrowser.mockImplementation((handler) => {
+        onUp = handler
+        return mockBrowser
       })
 
       googlehome.device('Living Room')
       googlehome.play('http://example.com/audio.mp3', jest.fn())
 
-      serviceUpHandler({
+      onUp({
         name: 'Kitchen-ABCD',
         addresses: ['192.168.1.88'],
         port: 8009
@@ -185,12 +187,11 @@ describe('google-home-notifier-2', () => {
       expect(mockBrowser.stop).not.toHaveBeenCalled()
     })
 
-    test('対象外デバイスが先にserviceUpしても探索を継続し、後から見つかった対象デバイスへ接続する(複数デバイス環境での探索打ち切り防止)', (done) => {
-      let serviceUpHandler
-      mockBrowser.on.mockImplementation((event, handler) => {
-        if (event === 'up') {
-          serviceUpHandler = handler
-        }
+    test('対象外デバイスが先にserviceが見つかっても探索を継続し、後から見つかった対象デバイスへ接続する(複数デバイス環境での探索打ち切り防止)', (done) => {
+      let onUp
+      mockCreateGoogleCastBrowser.mockImplementation((handler) => {
+        onUp = handler
+        return mockBrowser
       })
 
       googlehome.device('Living Room')
@@ -201,8 +202,8 @@ describe('google-home-notifier-2', () => {
         done()
       })
 
-      // 対象外デバイスが先にserviceUpしても探索を打ち切らないこと
-      serviceUpHandler({
+      // 対象外デバイスが先に見つかっても探索を打ち切らないこと
+      onUp({
         name: 'Kitchen-ABCD',
         addresses: ['192.168.1.88'],
         port: 8009
@@ -210,8 +211,8 @@ describe('google-home-notifier-2', () => {
       expect(mockCastClient.connect).not.toHaveBeenCalled()
       expect(mockBrowser.stop).not.toHaveBeenCalled()
 
-      // その後、対象デバイスがserviceUpすれば接続されること
-      serviceUpHandler({
+      // その後、対象デバイスが見つかれば接続されること
+      onUp({
         name: 'Living-Room-ABCD',
         addresses: ['192.168.1.77'],
         port: 8009
@@ -220,11 +221,10 @@ describe('google-home-notifier-2', () => {
     })
 
     test('mDNS探索中に別リクエストがsetUp()/ngrokUrl()を呼び出しても、notify()呼び出し時点の設定値が使用される(並行リクエストによる上書き防止)', (done) => {
-      let serviceUpHandler
-      mockBrowser.on.mockImplementation((event, handler) => {
-        if (event === 'up') {
-          serviceUpHandler = handler
-        }
+      let onUp
+      mockCreateGoogleCastBrowser.mockImplementation((handler) => {
+        onUp = handler
+        return mockBrowser
       })
 
       googlehome.device('Living Room')
@@ -253,14 +253,69 @@ describe('google-home-notifier-2', () => {
         done()
       })
 
-      // serviceUpが来る前に別リクエストがsetUp()/ngrokUrl()を呼び出したことを模す
+      // serviceが見つかる前に別リクエストがsetUp()/ngrokUrl()を呼び出したことを模す
       googlehome.setUp('en-US', 'en-US-Standard-A', '/tmp/second.mp3')
       googlehome.ngrokUrl('https://second.ngrok.io/text-mp3')
 
-      serviceUpHandler({
+      onUp({
         name: 'Living-Room-ABCD',
         addresses: ['192.168.1.77'],
         port: 8009
+      })
+    })
+  })
+
+  describe('mDNS discoveryのlifecycle(PR #83 Codex P1レビュー対応: bonjour-serviceのfind()はbrowser生成と同時に探索を開始するため、旧mdnsパッケージ前提のstart()/on()呼び出し順に依存しないことを保証する)', () => {
+    test('google-home-notifier-2 moduleをrequireしただけではmDNS discoveryを開始しない(createGoogleCastBrowserを呼び出さない)', () => {
+      // beforeEach で require 済み。ここでは追加の呼び出しを一切行わず、require時点の状態のみ検証する。
+      expect(mockCreateGoogleCastBrowser).not.toHaveBeenCalled()
+    })
+
+    test('device()を呼び出しただけ(notify()/play()を呼ぶ前)ではmDNS discoveryを開始しない', () => {
+      googlehome.device('Living Room')
+
+      expect(mockCreateGoogleCastBrowser).not.toHaveBeenCalled()
+    })
+
+    test('ip()明示指定のnotify()/play()ではmDNS browserを生成しない(discoveryを開始しない)', (done) => {
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      googlehome.notify('こんにちは', () => {
+        expect(mockCreateGoogleCastBrowser).not.toHaveBeenCalled()
+        done()
+      })
+    })
+
+    test('device()経路では、notify()/play()呼び出しで実際に探索が必要になった時点で初めてmDNS discoveryを開始する', () => {
+      googlehome.device('Living Room')
+      expect(mockCreateGoogleCastBrowser).not.toHaveBeenCalled()
+
+      googlehome.play('http://example.com/audio.mp3', jest.fn())
+      expect(mockCreateGoogleCastBrowser).toHaveBeenCalledTimes(1)
+    })
+
+    test('createGoogleCastBrowser()呼び出し中(bonjour-serviceのfind()相当)に同期的にserviceが見つかっても、up handlerは既に登録済みのため対象serviceへ正常に接続し、callbackが完了する', (done) => {
+      // bonjour-serviceのBonjour#find(opts, onUp)は、Browser constructor内でonUpを
+      // this.start()より先にon('up', onUp)登録してから探索を開始する実装のため、
+      // 呼び出し側(createGoogleCastBrowser)がonUpを渡した直後(理論上の最速タイミング)に
+      // serviceが見つかっても取りこぼさない。この最悪ケースをfind()呼び出し中に同期的に
+      // onUpを発火させることで再現する。
+      mockCreateGoogleCastBrowser.mockImplementation((handler) => {
+        handler({
+          name: 'Living-Room-ABCD',
+          addresses: ['192.168.1.77'],
+          port: 8009
+        })
+        return mockBrowser
+      })
+
+      googlehome.device('Living Room')
+      googlehome.play('http://example.com/audio.mp3', (res) => {
+        expect(mockCastClient.connect).toHaveBeenCalledWith('192.168.1.77', expect.any(Function))
+        expect(res).toBe('Device notified')
+        done()
       })
     })
   })

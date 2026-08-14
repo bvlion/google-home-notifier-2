@@ -42,14 +42,40 @@ jest.mock('@google-cloud/text-to-speech', () => ({
 // 生成すると、テストファイル側が保持する参照とソース側が実際に require する
 // 参照がずれてしまうため、永続する mock 関数をここで定義して参照を固定する。
 const mockWriteFile = jest.fn()
+const mockUnlink = jest.fn()
+const mockCopyFile = jest.fn()
+const mockRename = jest.fn()
 
 jest.mock('fs', () => ({
-  writeFile: mockWriteFile
+  writeFile: mockWriteFile,
+  unlink: mockUnlink,
+  copyFile: mockCopyFile,
+  rename: mockRename
 }))
+
+const { GET_GRACE_MS, MAX_PENDING_TTL_MS } = require('../request-mp3')
+
+// setUp()のmp3OutputPathを基準に組み立てられる、リクエスト固有ファイルパスの形式
+// (例: /tmp/first.mp3 -> /tmp/first-<32桁hex>.mp3)。
+const REQUEST_PATH_PATTERN = (basePath) => {
+  const dir = basePath.slice(0, basePath.lastIndexOf('/') + 1)
+  const withoutExt = basePath.slice(basePath.lastIndexOf('/') + 1, basePath.lastIndexOf('.'))
+  const ext = basePath.slice(basePath.lastIndexOf('.'))
+  return new RegExp(`^${dir}${withoutExt}-[0-9a-f]{32}${ext}$`)
+}
+
+// ngrokUrl()で設定した固定URLを基準に組み立てられる、リクエスト固有配信URLの形式
+// (例: https://example.ngrok.io/text-mp3 -> https://example.ngrok.io/text-mp3?id=<32桁hex>)。
+const REQUEST_URL_PATTERN = (baseUrl) =>
+  new RegExp(`^${baseUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\?id=[0-9a-f]{32}$`)
 
 describe('google-home-notifier-2', () => {
   let googlehome
   let mockPlayer
+  // jest.resetModules() のたびに request-mp3.js も新しいモジュールインスタンス(=新しいpending Map)が
+  // require されるため、markServed() はテストファイル先頭で一度だけ require したものではなく、
+  // 直近の require('../google-home-notifier-2') が内部で参照しているのと同じインスタンスを都度取得する。
+  let markServed
 
   beforeEach(() => {
     jest.resetModules()
@@ -68,8 +94,16 @@ describe('google-home-notifier-2', () => {
     )
 
     mockWriteFile.mockImplementation((path, data, encoding, cb) => cb(null))
+    mockUnlink.mockImplementation((path, cb) => cb(null))
+    mockCopyFile.mockImplementation((src, dest, cb) => cb(null))
+    mockRename.mockImplementation((src, dest, cb) => cb(null))
 
     googlehome = require('../google-home-notifier-2')
+    ;({ markServed } = require('../request-mp3'))
+  })
+
+  afterEach(() => {
+    jest.useRealTimers()
   })
 
   describe('Text-to-Speechクライアントの認証', () => {
@@ -206,13 +240,13 @@ describe('google-home-notifier-2', () => {
           expect.any(Function)
         )
         expect(mockWriteFile).toHaveBeenCalledWith(
-          '/tmp/first.mp3',
+          expect.stringMatching(REQUEST_PATH_PATTERN('/tmp/first.mp3')),
           expect.any(Buffer),
           'binary',
           expect.any(Function)
         )
         expect(mockPlayer.load).toHaveBeenCalledWith(
-          expect.objectContaining({ contentId: 'https://first.ngrok.io/text-mp3' }),
+          expect.objectContaining({ contentId: expect.stringMatching(REQUEST_URL_PATTERN('https://first.ngrok.io/text-mp3')) }),
           { autoplay: true },
           expect.any(Function)
         )
@@ -321,13 +355,13 @@ describe('google-home-notifier-2', () => {
           expect.any(Function)
         )
         expect(mockWriteFile).toHaveBeenCalledWith(
-          '/tmp/sample.mp3',
+          expect.stringMatching(REQUEST_PATH_PATTERN('/tmp/sample.mp3')),
           Buffer.from('dummy-audio'),
           'binary',
           expect.any(Function)
         )
         expect(mockPlayer.load).toHaveBeenCalledWith(
-          expect.objectContaining({ contentId: 'https://example.ngrok.io/text-mp3' }),
+          expect.objectContaining({ contentId: expect.stringMatching(REQUEST_URL_PATTERN('https://example.ngrok.io/text-mp3')) }),
           { autoplay: true },
           expect.any(Function)
         )
@@ -371,7 +405,7 @@ describe('google-home-notifier-2', () => {
       googlehome.ip('192.168.1.50')
       googlehome.notify('こんにちは', () => {
         expect(mockWriteFile).toHaveBeenCalledWith(
-          '/tmp/first.mp3',
+          expect.stringMatching(REQUEST_PATH_PATTERN('/tmp/first.mp3')),
           expect.any(Buffer),
           'binary',
           expect.any(Function)
@@ -395,7 +429,7 @@ describe('google-home-notifier-2', () => {
 
       googlehome.notify('こんにちは', () => {
         expect(mockPlayer.load).toHaveBeenCalledWith(
-          expect.objectContaining({ contentId: 'https://first.ngrok.io/text-mp3' }),
+          expect.objectContaining({ contentId: expect.stringMatching(REQUEST_URL_PATTERN('https://first.ngrok.io/text-mp3')) }),
           { autoplay: true },
           expect.any(Function)
         )
@@ -483,6 +517,332 @@ describe('google-home-notifier-2', () => {
 
       googlehome.ip('192.168.1.50')
       googlehome.play('http://example.com/audio.mp3', callback)
+    })
+  })
+
+  describe('同時実行されたnotify()同士の競合(#73)', () => {
+    test('2つのnotify()をほぼ同時に実行し、TTS callbackが任意の順序で完了しても、それぞれ異なるファイル/URLへ書き込まれ、対応するaudioContentと正しく対応し、両方のcallbackが正常に完了する', (done) => {
+      const synthCalls = []
+      mockSynthesizeSpeech.mockImplementation((request, cb) => {
+        synthCalls.push({ text: request.input.text, cb })
+      })
+
+      const writtenFiles = []
+      mockWriteFile.mockImplementation((path, data, encoding, cb) => {
+        writtenFiles.push({ path, data })
+        cb(null)
+      })
+
+      const loadedUrls = []
+      mockPlayer.load.mockImplementation((media, opts, cb) => {
+        loadedUrls.push(media.contentId)
+        cb(null)
+      })
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      const results = []
+      const finishIfDone = () => {
+        if (results.length !== 2) {
+          return
+        }
+
+        // 書き込み先ファイル・再生URLがそれぞれ異なること(同一ファイル/URLへの競合がないこと)
+        expect(writtenFiles.length).toBe(2)
+        expect(writtenFiles[0].path).not.toBe(writtenFiles[1].path)
+        expect(loadedUrls.length).toBe(2)
+        expect(loadedUrls[0]).not.toBe(loadedUrls[1])
+
+        const extractId = (value) => (value.match(/([0-9a-f]{32})/) || [])[1]
+
+        // 書き込まれたファイルのidと、Castへ渡されたURLのidが1件ずつ対応していること
+        // (完了順に処理されるため、writtenFiles[i]とloadedUrls[i]が同一リクエストの結果になる)
+        expect(extractId(writtenFiles[0].path)).toBe(extractId(loadedUrls[0]))
+        expect(extractId(writtenFiles[1].path)).toBe(extractId(loadedUrls[1]))
+        expect(extractId(writtenFiles[0].path)).not.toBe(extractId(writtenFiles[1].path))
+
+        // 各ファイルの中身が、そのリクエストのTTS audioContentと対応していること
+        // (通知Bを先に完了させたため、書き込み順は B, A の順になる)
+        expect(writtenFiles[0].data.toString()).toBe('audio-B')
+        expect(writtenFiles[1].data.toString()).toBe('audio-A')
+
+        expect(results).toEqual(expect.arrayContaining([
+          { label: 'A', res: 'Device notified' },
+          { label: 'B', res: 'Device notified' }
+        ]))
+
+        done()
+      }
+
+      googlehome.notify('通知A', (res) => {
+        results.push({ label: 'A', res })
+        finishIfDone()
+      })
+      googlehome.notify('通知B', (res) => {
+        results.push({ label: 'B', res })
+        finishIfDone()
+      })
+
+      expect(synthCalls.length).toBe(2)
+
+      // 任意の順序(ここではB→A)でTTS callbackが完了しても競合しないことを確認する
+      synthCalls[1].cb(null, { audioContent: Buffer.from('audio-B') })
+      synthCalls[0].cb(null, { audioContent: Buffer.from('audio-A') })
+    })
+  })
+
+  describe('一時MP3ファイルのcleanup(#73 / PR #75レビュー対応)', () => {
+    test('MP3配信用serverから実際にGETされた通知(markServed)がない限り、GET猶予時間(GET_GRACE_MS)相当が経過してもcleanupされない。GETされないまま最大保持時間(MAX_PENDING_TTL_MS)を過ぎると最後の砦としてcleanupされる(player.load()のcallbackタイミングだけに依存しない)', (done) => {
+      jest.useFakeTimers()
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      googlehome.notify('こんにちは', (res) => {
+        expect(res).toBe('Device notified')
+
+        // Cast側のGETがまだ完了した通知(markServed)を受けていない間は、
+        // GET猶予時間相当が経過してもcleanupされない(#73レビュー: 固定60秒だけに頼らない)
+        jest.advanceTimersByTime(GET_GRACE_MS)
+        expect(mockUnlink).not.toHaveBeenCalled()
+
+        // GETされないまま最大保持時間に達すると、最後の砦としてcleanupされる
+        jest.advanceTimersByTime(MAX_PENDING_TTL_MS)
+        expect(mockUnlink).toHaveBeenCalledTimes(1)
+        expect(mockUnlink).toHaveBeenCalledWith(
+          expect.stringMatching(REQUEST_PATH_PATTERN('/tmp/sample.mp3')),
+          expect.any(Function)
+        )
+        done()
+      })
+    })
+
+    test('MP3配信用serverが実際にGETしたことをmarkServed()で通知すると、最大保持時間を待たずGET猶予時間後にcleanupされる', (done) => {
+      jest.useFakeTimers()
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      googlehome.notify('こんにちは', () => {
+        const [writtenPath] = mockWriteFile.mock.calls[0]
+
+        // MP3配信用serverがGETした(main.jsのcreateMp3App()がmarkServed()を呼ぶ)ことを模す
+        markServed(writtenPath)
+
+        expect(mockUnlink).not.toHaveBeenCalled()
+        jest.advanceTimersByTime(GET_GRACE_MS)
+
+        expect(mockUnlink).toHaveBeenCalledTimes(1)
+        expect(mockUnlink).toHaveBeenCalledWith(writtenPath, expect.any(Function))
+
+        // 最大保持時間まで進めても、二重にcleanupが実行されない(runCleanup()の冪等性)
+        jest.advanceTimersByTime(MAX_PENDING_TTL_MS)
+        expect(mockUnlink).toHaveBeenCalledTimes(1)
+        done()
+      })
+    })
+
+    test('cleanup(unlink)が失敗しても、既に完了しているnotify()のcallbackは再発火せず、正常な通知結果に影響しない', (done) => {
+      jest.useFakeTimers()
+      mockUnlink.mockImplementation((path, cb) => cb(new Error('cleanup failed')))
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      const callback = jest.fn()
+      googlehome.notify('こんにちは', callback)
+
+      expect(callback).toHaveBeenCalledTimes(1)
+      expect(callback).toHaveBeenCalledWith('Device notified')
+
+      jest.advanceTimersByTime(MAX_PENDING_TTL_MS)
+
+      // cleanup失敗後もcallbackが再度呼ばれていないこと
+      expect(callback).toHaveBeenCalledTimes(1)
+      done()
+    })
+  })
+
+  describe('idなしGETの後方互換(mp3OutputPath自体の更新, PR #75レビュー対応)', () => {
+    test('TTS成功時、request固有ファイルの内容がmp3OutputPath(idなしGET用)へatomicに反映される(コピー後rename)', (done) => {
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      googlehome.notify('こんにちは', () => {
+        const [requestPath] = mockWriteFile.mock.calls[0]
+        const expectedTmpPath = `${requestPath}.tmp`
+
+        expect(mockCopyFile).toHaveBeenCalledWith(requestPath, expectedTmpPath, expect.any(Function))
+        expect(mockRename).toHaveBeenCalledWith(expectedTmpPath, '/tmp/sample.mp3', expect.any(Function))
+        done()
+      })
+    })
+
+    test('Cast接続に失敗しても、TTS/書き込み自体は成功しているためmp3OutputPathへの反映は行われる', (done) => {
+      let errorHandler
+      mockCastClient.connect.mockImplementation(() => {})
+      mockCastClient.on.mockImplementation((event, handler) => {
+        if (event === 'error') {
+          errorHandler = handler
+        }
+      })
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      googlehome.notify('こんにちは', (res) => {
+        expect(res).toBe('error')
+        expect(mockCopyFile).toHaveBeenCalledWith(
+          expect.stringMatching(REQUEST_PATH_PATTERN('/tmp/sample.mp3')),
+          expect.stringMatching(/\.tmp$/),
+          expect.any(Function)
+        )
+        expect(mockRename).toHaveBeenCalledWith(expect.any(String), '/tmp/sample.mp3', expect.any(Function))
+        done()
+      })
+
+      errorHandler(new Error('connection refused'))
+    })
+
+    test('TTS合成に失敗した場合はmp3OutputPathの更新も行われない', () => {
+      mockSynthesizeSpeech.mockImplementation((request, cb) => cb(new Error('tts failed')))
+      const callback = jest.fn()
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.notify('こんにちは', callback)
+
+      expect(mockCopyFile).not.toHaveBeenCalled()
+      expect(mockRename).not.toHaveBeenCalled()
+      expect(callback).toHaveBeenCalledWith('error')
+    })
+
+    test('2回連続でnotify()が成功すると、mp3OutputPathは2回目の内容で上書きされる(rename()で毎回置き換わる)', (done) => {
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      googlehome.notify('1回目', () => {
+        googlehome.notify('2回目', () => {
+          expect(mockRename).toHaveBeenCalledTimes(2)
+          expect(mockRename).toHaveBeenNthCalledWith(1, expect.any(String), '/tmp/sample.mp3', expect.any(Function))
+          expect(mockRename).toHaveBeenNthCalledWith(2, expect.any(String), '/tmp/sample.mp3', expect.any(Function))
+          done()
+        })
+      })
+    })
+
+    test('copyFileが失敗しても、mp3OutputPathへの反映処理は完了扱いとなり後続のCast処理・notify callbackは実行される', (done) => {
+      mockCopyFile.mockImplementation((src, dest, cb) => cb(new Error('copy failed')))
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      googlehome.notify('こんにちは', (res) => {
+        expect(res).toBe('Device notified')
+        expect(mockRename).not.toHaveBeenCalled()
+        done()
+      })
+    })
+
+    test('renameが失敗しても、tmpファイルのcleanup後にCast処理・notify callbackは実行される', (done) => {
+      mockRename.mockImplementation((src, dest, cb) => cb(new Error('rename failed')))
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      googlehome.notify('こんにちは', (res) => {
+        expect(res).toBe('Device notified')
+        expect(mockUnlink).toHaveBeenCalledWith(expect.stringMatching(/\.tmp$/), expect.any(Function))
+        done()
+      })
+    })
+
+    // PR #75レビュー(2回目)対応: updateLatestMp3()はfs.copyFile()→fs.rename()という非同期処理のため、
+    // これらのcallbackが完了する前にCast処理(onDeviceUp)やnotify()のcallbackへ進んでしまうと、
+    // 元実装(fs.writeFile()完了後にのみCast処理へ進む)と順序が異なり、idなしGETがmp3OutputPathの
+    // rename完了前に古い内容を読みうるレースが残る。copyFile/renameのcallbackを意図的に保留し、
+    // それらが完了するまでCast接続・notify callbackが実行されないことを直接確認する。
+    test('mp3OutputPathへの反映(copyFile→rename)が完了するまで、Cast接続やnotify()のcallbackは実行されない(順序維持のレース防止)', () => {
+      let copyFileCallback
+      let renameCallback
+      mockCopyFile.mockImplementation((src, dest, cb) => {
+        copyFileCallback = cb
+      })
+      mockRename.mockImplementation((src, dest, cb) => {
+        renameCallback = cb
+      })
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      const callback = jest.fn()
+      googlehome.notify('こんにちは', callback)
+
+      // copyFile完了前: Cast接続もnotify callbackもまだ行われていないこと
+      expect(mockCopyFile).toHaveBeenCalledTimes(1)
+      expect(mockCastClient.connect).not.toHaveBeenCalled()
+      expect(callback).not.toHaveBeenCalled()
+
+      // copyFile成功 → rename開始。rename完了前もまだCast処理は始まらないこと
+      copyFileCallback(null)
+      expect(mockRename).toHaveBeenCalledTimes(1)
+      expect(mockCastClient.connect).not.toHaveBeenCalled()
+      expect(callback).not.toHaveBeenCalled()
+
+      // rename成功 → ここでようやくCast処理・notify callbackへ進むこと
+      renameCallback(null)
+
+      expect(mockCastClient.connect).toHaveBeenCalledTimes(1)
+      expect(callback).toHaveBeenCalledTimes(1)
+      expect(callback).toHaveBeenCalledWith('Device notified')
+    })
+
+    test('mp3OutputPathへの反映中にcopyFileが失敗しても、その時点でCast接続・notify callbackへ進む(hangしない)', () => {
+      let copyFileCallback
+      mockCopyFile.mockImplementation((src, dest, cb) => {
+        copyFileCallback = cb
+      })
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      const callback = jest.fn()
+      googlehome.notify('こんにちは', callback)
+
+      expect(mockCastClient.connect).not.toHaveBeenCalled()
+      expect(callback).not.toHaveBeenCalled()
+
+      copyFileCallback(new Error('copy failed'))
+
+      expect(mockRename).not.toHaveBeenCalled()
+      expect(mockCastClient.connect).toHaveBeenCalledTimes(1)
+      expect(callback).toHaveBeenCalledTimes(1)
+      expect(callback).toHaveBeenCalledWith('Device notified')
+    })
+
+    test('callbackは(copyFile/rename失敗時も含め)最大1回しか呼ばれない', () => {
+      mockCopyFile.mockImplementation((src, dest, cb) => cb(new Error('copy failed')))
+
+      googlehome.setUp('ja-JP', 'ja-JP-Standard-A', '/tmp/sample.mp3')
+      googlehome.ip('192.168.1.50')
+      googlehome.ngrokUrl('https://example.ngrok.io/text-mp3')
+
+      const callback = jest.fn()
+      googlehome.notify('こんにちは', callback)
+
+      expect(callback).toHaveBeenCalledTimes(1)
     })
   })
 })

@@ -7,35 +7,33 @@
 // protobufjs自体の正しさを検証する目的ではない。
 
 const path = require('path')
-const protobuf = require('protobufjs')
+const { createRequire } = require('module')
+
+// このファイル自身のrequire('protobufjs')はdependency treeのhoisting次第で
+// castv2とは別のprotobufjs(例えば@google-cloud/text-to-speech経由の7.x)を
+// 指す可能性があり、それだとoverrideがcastv2側に実際に効いているかを検証
+// できない。castv2/lib/proto.jsのmodule resolution contextから解決することで、
+// 「castv2が実際に使うprotobufjs」だけをテスト対象にする。
+const castv2ProtoPath = require.resolve('castv2/lib/proto.js')
+const castv2Require = createRequire(castv2ProtoPath)
+const protobuf = castv2Require('protobufjs')
+const castChannelProtoPath = path.join(path.dirname(castv2ProtoPath), 'cast_channel.proto')
 
 describe('castv2 + protobufjs override互換性 (Issue #84)', () => {
-  test('overrideで解決されたprotobufjsが7系であること', () => {
-    const installedVersion = require('protobufjs/package.json').version
+  test('castv2が実際に解決するprotobufjsが7系であること', () => {
+    const installedVersion = castv2Require('protobufjs/package.json').version
     expect(installedVersion.split('.')[0]).toBe('7')
   })
 
   test('castv2同梱のcast_channel.protoからCastMessageをlookupTypeできること', async () => {
-    const protoPath = path.join(
-      path.dirname(require.resolve('castv2/package.json')),
-      'lib',
-      'cast_channel.proto'
-    )
-
-    const root = await protobuf.load(protoPath)
+    const root = await protobuf.load(castChannelProtoPath)
     const CastMessage = root.lookupType('extensions.api.cast_channel.CastMessage')
 
     expect(CastMessage).toBeDefined()
   })
 
   test('CastMessageをencode/decodeした結果が元のデータと一致すること', async () => {
-    const protoPath = path.join(
-      path.dirname(require.resolve('castv2/package.json')),
-      'lib',
-      'cast_channel.proto'
-    )
-
-    const root = await protobuf.load(protoPath)
+    const root = await protobuf.load(castChannelProtoPath)
     const CastMessage = root.lookupType('extensions.api.cast_channel.CastMessage')
 
     const original = {
@@ -65,8 +63,8 @@ describe('castv2 + protobufjs override互換性 (Issue #84)', () => {
     // requireした直後は未初期化の可能性がある。実際にgoogle-home-notifier-2.jsが
     // requireするcastv2-client経由の初期化タイミングと同じ非同期性を踏まえ、
     // ポーリングでextension登録完了を待つ。
-    delete require.cache[require.resolve('castv2/lib/proto.js')]
-    const proto = require('castv2/lib/proto.js')
+    delete require.cache[castv2ProtoPath]
+    const proto = require(castv2ProtoPath)
 
     const original = { protocolVersion: 0, sourceId: 's', destinationId: 'd', namespace: 'n', payloadType: 0, payloadUtf8: 'x' }
 

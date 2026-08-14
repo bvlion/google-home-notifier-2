@@ -318,6 +318,60 @@ describe('google-home-notifier-2', () => {
         done()
       })
     })
+
+    test('並行して2つのmDNS探索(device()経路)が走っている場合、一方が対象deviceを発見してstop()しても、もう一方の探索は継続し正しく接続できる(createGoogleCastBrowser()の呼び出しごとに独立したbrowserを生成するため。PR #83 Codex P2レビュー対応の回帰)', (done) => {
+      const browserA = { stop: jest.fn() }
+      const browserB = { stop: jest.fn() }
+      let onUpA
+      let onUpB
+      mockCreateGoogleCastBrowser
+        .mockImplementationOnce((handler) => {
+          onUpA = handler
+          return browserA
+        })
+        .mockImplementationOnce((handler) => {
+          onUpB = handler
+          return browserB
+        })
+
+      googlehome.device('Living Room')
+
+      let completed = 0
+      const finishIfBothDone = () => {
+        completed += 1
+        if (completed === 2) {
+          done()
+        }
+      }
+
+      googlehome.play('http://example.com/audio-a.mp3', (res) => {
+        expect(res).toBe('Device notified')
+        finishIfBothDone()
+      })
+      googlehome.play('http://example.com/audio-b.mp3', (res) => {
+        expect(res).toBe('Device notified')
+        finishIfBothDone()
+      })
+
+      expect(mockCreateGoogleCastBrowser).toHaveBeenCalledTimes(2)
+
+      // Aの探索が先に対象deviceを発見してstopする
+      onUpA({
+        name: 'Living-Room-ABCD',
+        addresses: ['192.168.1.77'],
+        port: 8009
+      })
+      expect(browserA.stop).toHaveBeenCalledTimes(1)
+      expect(browserB.stop).not.toHaveBeenCalled()
+
+      // Bの探索はAのstop()の影響を受けず継続しており、対象deviceを発見すれば接続できる
+      onUpB({
+        name: 'Living-Room-EFGH',
+        addresses: ['192.168.1.78'],
+        port: 8009
+      })
+      expect(browserB.stop).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('volume()', () => {

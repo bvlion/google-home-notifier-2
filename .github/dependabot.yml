@@ -2,7 +2,25 @@ version: 2
 updates:
   - package-ecosystem: "npm"
     directory: "/"
+    # 家庭内Raspberry Piで継続稼働する小規模OSSのため、PR数を抑えつつ
+    # patch/minorのversion updateは自動グルーピングし、major version update
+    # は個別に扱う。security updateの運用はこのPRでは変更しない。
     schedule:
-      interval: "daily"
+      interval: "weekly"
       time: "09:00"
       timezone: "Asia/Tokyo"
+    groups:
+      # patch/minor updateはまとめて1PRにし、確認コストを下げる。
+      # update-typesにmajorを含めないため、major updateはgroup対象外のまま
+      # 個別PRとして作成される(GitHub公式仕様)。
+      npm-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    # 上記のschedule(interval: weekly)およびnpm-minor-patch groupは
+    # applies-to: version-updates であり、security updateには適用されない。
+    # security updatesの作成・grouping方針(Repository/Organization側の
+    # Grouped security updates設定を含む)は、このPRでは変更していない。

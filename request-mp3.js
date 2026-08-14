@@ -83,7 +83,7 @@ const appendRequestId = (url, id) => {
 const UNLINK_RETRY_LIMIT = 3
 const UNLINK_RETRY_DELAY_MS = 5000
 
-// filePath -> { cleaned, cleaning, maxTimer, servedTimer, retryTimer }
+// filePath -> { cleaned, cleaning, maxTimer, servedTimer, retryTimer, onSettled }
 // request固有MP3ごとのcleanup状態を保持する。プロセス内メモリのみで管理するため、
 // プロセス再起動・クラッシュ時はここでの状態は失われる(その場合の掃除はcleanupOrphanedRequestFiles()が担う)。
 const pending = new Map()
@@ -100,6 +100,9 @@ const unref = (timer) => {
 // 何もしないことで並行unlink・二重cleanupを防ぐ。retryを使い切って諦めた場合はfalseへ戻すため、
 // (現状の呼び出し経路では通常発生しないが)将来何らかのきっかけで再度cleanupが試みられた場合にも
 // retry可能な状態のままになる。
+// entry.onSettled: 成功/ENOENT/retry上限到達のいずれかで最終状態に達した時点で一度だけ呼ばれる
+// (通常のnotify()由来の登録では未使用。cleanupOrphanedRequestFiles()が「十分古い」孤児ファイルの
+// 削除完了を待ってfinishOne()するために利用する)。
 const attemptUnlink = (filePath, attempt) => {
   fs.unlink(filePath, (err) => {
     const entry = pending.get(filePath)
@@ -110,6 +113,9 @@ const attemptUnlink = (filePath, attempt) => {
       entry.cleaned = true
       entry.cleaning = false
       pending.delete(filePath)
+      if (entry.onSettled) {
+        entry.onSettled()
+      }
       return
     }
 
@@ -117,6 +123,11 @@ const attemptUnlink = (filePath, attempt) => {
 
     if (attempt >= UNLINK_RETRY_LIMIT) {
       entry.cleaning = false
+      const onSettled = entry.onSettled
+      entry.onSettled = null
+      if (onSettled) {
+        onSettled()
+      }
       return
     }
 
@@ -143,7 +154,9 @@ const runCleanup = (filePath) => {
 // 実際のGET契機のcleanupはmarkServed()が担う(このtimerより先に発火する想定)。
 // 同じfilePathへ複数回呼ばれても(呼び出し元での重複登録を想定した保険)、既存のtimerを
 // clearTimeout()してから登録し直すため、古いtimerがリークして早期・二重cleanupを起こすことはない。
-const registerForCleanup = (filePath) => {
+// onSettledは省略可能(通常のnotify()由来の登録では不要)。cleanupOrphanedRequestFiles()が
+// 「十分古い」孤児ファイルの削除完了を検知するために内部的に利用する。
+const registerForCleanup = (filePath, onSettled) => {
   const existing = pending.get(filePath)
   if (existing) {
     clearTimeout(existing.maxTimer)
@@ -159,6 +172,7 @@ const registerForCleanup = (filePath) => {
     cleaning: false,
     servedTimer: null,
     retryTimer: null,
+    onSettled: onSettled || null,
     maxTimer: unref(setTimeout(() => runCleanup(filePath), MAX_PENDING_TTL_MS))
   })
 }
@@ -178,11 +192,18 @@ const markServed = (filePath) => {
 // mp3OutputPathの保存ディレクトリ内にある、このアプリが生成した命名規則に一致するファイルを
 // 起動時に走査する。mp3OutputPath自体や無関係なファイルは対象にしない。
 // - 十分に古い(=プロセス再起動・クラッシュ等でcleanup timer=メモリ上のpendingが失われたとみなせる)
-//   ファイルは、その場で削除する。
+//   ファイルは、通常のcleanupと同じbounded retry機構(registerForCleanup()+runCleanup())に乗せて
+//   削除する。EBUSY等でunlinkが一時的に失敗しても、新しく別系統のretryを実装せず、既存の
+//   UNLINK_RETRY_LIMIT/UNLINK_RETRY_DELAY_MSでretryする。retry上限に達してもcleanupOrphanedRequestFiles()
+//   自体は完了できる(次回起動時のorphan sweepへ委ねる)。
 // - まだ新しい(再起動直前に生成された可能性がある)ファイルは即削除せず、代わりに
 //   registerForCleanup()で新プロセスのcleanup管理へ登録する。これにより、その後実際にGETされれば
 //   markServed()経由でGET_GRACE_MS後に、GETされなくてもMAX_PENDING_TTL_MS後に、最終的には必ず
 //   cleanupされる(「新しいので今は消さない」が「cleanup管理から永久に外れる」ことにはならない)。
+// finishOne()(=各対象ファイルに対するdone()到達の1件分)は、対象ファイルのcleanupが最終状態
+// (成功/ENOENT/retry上限到達、または「まだ新しいので登録のみ」)に達してから呼ぶ。retry timerを
+// 予約しただけの時点でfinishOne()してしまうと、done()到達後もまだretryが進行中という意味変更に
+// なってしまうため、それは行わない。
 // createMp3App()の生成時(=起動時)に一度だけ呼び出す想定。
 const cleanupOrphanedRequestFiles = (mp3OutputPath, options = {}, done = () => {}) => {
   const minAgeMs = options.minAgeMs !== undefined ? options.minAgeMs : ORPHAN_MIN_AGE_MS
@@ -226,12 +247,9 @@ const cleanupOrphanedRequestFiles = (mp3OutputPath, options = {}, done = () => {
           finishOne()
           return
         }
-        fs.unlink(filePath, (err) => {
-          if (err && err.code !== 'ENOENT') {
-            console.error('ERROR:', err)
-          }
-          finishOne()
-        })
+        // 十分古い孤児ファイル: 通常cleanupと同じbounded retry機構に乗せ、最終状態に達してからfinishOne()する。
+        registerForCleanup(filePath, finishOne)
+        runCleanup(filePath)
       })
     })
   })

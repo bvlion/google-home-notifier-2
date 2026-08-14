@@ -376,6 +376,141 @@ describe('request-mp3.js', () => {
       })
     })
 
+    // Codexレビュー(2026-08-14, discussion_r3780058348)対応: cleanupOrphanedRequestFiles()が
+    // 「十分古い」と判断した孤児ファイルの削除は、以前はfs.unlink()を1回しか試みておらず、
+    // EBUSY等の一時的な失敗があるとそのプロセスでは二度とretryされなかった。新しく別系統の
+    // retryを実装せず、通常cleanupと同じbounded retry機構(registerForCleanup()+runCleanup()、
+    // UNLINK_RETRY_LIMIT/UNLINK_RETRY_DELAY_MS)へ統一した。
+    describe('十分に古い孤児ファイルのunlink retry(PR #75レビュー対応)', () => {
+      // fake timerとreal非同期I/O(readdir/stat/unlink)を混在させると、環境によって両者の
+      // flushタイミングが安定しない(実測でflakyになった)ため、ここではreal timer/real fsの
+      // ままsetTimeout()自体の待機時間だけを短縮する方式を採る。UNLINK_RETRY_DELAY_MS(5秒)分の
+      // 実時間待機を避けつつ、cleanupOrphanedRequestFiles()自体のdone()callbackを完了の合図として
+      // 使うことで、確定的かつ安定して検証する。
+      let setTimeoutSpy
+
+      beforeEach(() => {
+        const realSetTimeout = global.setTimeout
+        setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb, _ms, ...args) => realSetTimeout(cb, 0, ...args))
+      })
+
+      afterEach(() => {
+        setTimeoutSpy.mockRestore()
+      })
+
+      test('1回目のunlinkがEBUSY等で失敗しても、bounded retryのうちに成功すれば最終的にcleanupされ、その後にdone()が呼ばれる', (done) => {
+        const id = requestMp3.generateRequestId()
+        const orphanPath = writeTrackedFile(requestMp3.resolveRequestMp3Path(mp3OutputPath, id), 'orphan')
+        const old = new Date(Date.now() - 1000)
+        fs.utimesSync(orphanPath, old, old)
+        writeTrackedFile(mp3OutputPath, 'latest')
+
+        let callCount = 0
+        const unlinkSpy = jest.spyOn(fs, 'unlink').mockImplementation((p, cb) => {
+          callCount += 1
+          if (callCount === 1) {
+            const err = new Error('resource busy or locked')
+            err.code = 'EBUSY'
+            cb(err)
+            return
+          }
+          fs.unlinkSync(p)
+          cb(null)
+        })
+
+        requestMp3.cleanupOrphanedRequestFiles(mp3OutputPath, { minAgeMs: 500 }, () => {
+          expect(unlinkSpy).toHaveBeenCalledTimes(2)
+          expect(fs.existsSync(orphanPath)).toBe(false)
+          unlinkSpy.mockRestore()
+          done()
+        })
+      })
+
+      test('起動時orphanのunlinkがENOENTを返す場合(fs.stat後にファイルが消えた状況を模す)、retryせず即成功扱いでdone()へ進む', (done) => {
+        const id = requestMp3.generateRequestId()
+        const orphanPath = writeTrackedFile(requestMp3.resolveRequestMp3Path(mp3OutputPath, id), 'orphan')
+        const old = new Date(Date.now() - 1000)
+        fs.utimesSync(orphanPath, old, old)
+        writeTrackedFile(mp3OutputPath, 'latest')
+
+        const unlinkSpy = jest.spyOn(fs, 'unlink').mockImplementation((p, cb) => {
+          const err = new Error('no such file or directory')
+          err.code = 'ENOENT'
+          cb(err)
+        })
+
+        requestMp3.cleanupOrphanedRequestFiles(mp3OutputPath, { minAgeMs: 500 }, () => {
+          expect(unlinkSpy).toHaveBeenCalledTimes(1)
+          unlinkSpy.mockRestore()
+          done()
+        })
+      })
+
+      test('起動時orphanのunlinkが繰り返し失敗しても、無限retryせずUNLINK_RETRY_LIMIT回で諦め、cleanupOrphanedRequestFiles()自体は完了する(done()は1回だけ)', (done) => {
+        const id = requestMp3.generateRequestId()
+        const orphanPath = writeTrackedFile(requestMp3.resolveRequestMp3Path(mp3OutputPath, id), 'orphan')
+        const old = new Date(Date.now() - 1000)
+        fs.utimesSync(orphanPath, old, old)
+        writeTrackedFile(mp3OutputPath, 'latest')
+
+        const unlinkSpy = jest.spyOn(fs, 'unlink').mockImplementation((p, cb) => {
+          const err = new Error('resource busy or locked')
+          err.code = 'EBUSY'
+          cb(err)
+        })
+        const doneSpy = jest.fn()
+
+        requestMp3.cleanupOrphanedRequestFiles(mp3OutputPath, { minAgeMs: 500 }, () => {
+          doneSpy()
+          expect(unlinkSpy).toHaveBeenCalledTimes(requestMp3.UNLINK_RETRY_LIMIT)
+          expect(fs.existsSync(orphanPath)).toBe(true)
+
+          // retry上限後、さらに(短縮された)実timerが1回分経過しても、追加のunlink呼び出しや
+          // done()の再発火が起きないことを確認する(無限retryにしないことの確認)
+          setTimeout(() => {
+            expect(unlinkSpy).toHaveBeenCalledTimes(requestMp3.UNLINK_RETRY_LIMIT)
+            expect(doneSpy).toHaveBeenCalledTimes(1)
+            unlinkSpy.mockRestore()
+            done()
+          }, 0)
+        })
+      })
+
+      test('複数の古い孤児ファイル(即成功するものとretry後に成功するもの)が混在しても、全対象が最終状態に達してからdone()が1回だけ呼ばれる', (done) => {
+        const idA = requestMp3.generateRequestId()
+        const idB = requestMp3.generateRequestId()
+        const pathA = writeTrackedFile(requestMp3.resolveRequestMp3Path(mp3OutputPath, idA), 'orphan-a')
+        const pathB = writeTrackedFile(requestMp3.resolveRequestMp3Path(mp3OutputPath, idB), 'orphan-b')
+        const old = new Date(Date.now() - 1000)
+        fs.utimesSync(pathA, old, old)
+        fs.utimesSync(pathB, old, old)
+        writeTrackedFile(mp3OutputPath, 'latest')
+
+        let pathBAttempts = 0
+        const unlinkSpy = jest.spyOn(fs, 'unlink').mockImplementation((p, cb) => {
+          if (p === pathB) {
+            pathBAttempts += 1
+            if (pathBAttempts === 1) {
+              const err = new Error('resource busy or locked')
+              err.code = 'EBUSY'
+              cb(err)
+              return
+            }
+          }
+          fs.unlinkSync(p)
+          cb(null)
+        })
+
+        requestMp3.cleanupOrphanedRequestFiles(mp3OutputPath, { minAgeMs: 500 }, () => {
+          expect(fs.existsSync(pathA)).toBe(false)
+          expect(fs.existsSync(pathB)).toBe(false)
+          expect(pathBAttempts).toBe(2)
+          unlinkSpy.mockRestore()
+          done()
+        })
+      })
+    })
+
     // Codexレビュー(2026-08-14)対応: 起動時cleanupが「まだ新しいので今は削除しない」と判断した
     // request固有MP3が、新プロセスのcleanup管理(pending)には登録されておらず、その後GETされても
     // markServed()がno-opになり、GETされなくても二度と掃除されない(=永久に残り続ける)穴があった。

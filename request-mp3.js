@@ -1,24 +1,19 @@
 'use strict'
 
-// google-home-notifier-2.js(書き込み側)とmain.js(配信側)で共有し、request固有MP3の
-// ファイル名組み立てルールが食い違わないようにする。
-
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
 
-// 内部生成のrequest id(16byteをhex化した32文字)のみを受け付ける形式。HTTPリクエストから
-// 受け取ったidはこのpatternで検証してからパス組み立てに使い、path traversalを防ぐ。
+// HTTP由来のidをhex形式に限定し、path traversalを防ぐ。
 const REQUEST_ID_PATTERN = /^[0-9a-f]{32}$/
 
-// GET直後の即時削除でリトライ不能にならないための猶予時間。
+// GET直後の即時削除だとCast側のretryができなくなるための猶予。
 const GET_GRACE_MS = 10000
 
-// Castデバイスが何らかの理由でGETしなかった場合の、最後の砦としての最大保持時間。
+// GETされなかったファイルを無期限に残さないための上限。
 const MAX_PENDING_TTL_MS = 10 * 60 * 1000
 
-// 起動時の孤児ファイル掃除で、起動直前に生成された可能性があるファイルを
-// 誤って削除しないための最小経過時間。
+// 再起動直前に生成されたファイルを誤削除しないための猶予。
 const ORPHAN_MIN_AGE_MS = 60 * 1000
 
 const generateRequestId = () => crypto.randomBytes(16).toString('hex')
@@ -42,8 +37,7 @@ const resolveRequestMp3Path = (mp3OutputPath, id) => {
   return path.join(dir, `${base}-${id}${ext}`)
 }
 
-// request固有MP3(<base>-<32桁hex><ext>)とそのtmpファイルにのみマッチする。
-// mp3OutputPath自体や無関係なファイルは対象にしない。
+// cleanup対象を、このアプリが生成したファイルだけに限定する。
 const orphanCandidatePattern = (mp3OutputPath) => {
   const { base, ext } = splitOutputPath(mp3OutputPath)
   return new RegExp(`^${escapeForRegExp(base)}-[0-9a-f]{32}${escapeForRegExp(ext)}(\\.tmp)?$`)
@@ -57,14 +51,9 @@ const appendRequestId = (url, id) => {
   return `${url}${separator}id=${id}`
 }
 
-// ENOENT以外のunlink失敗は有限回数・一定間隔でretryする。retry上限に達しても諦めるだけで、
-// 次回起動時のcleanupOrphanedRequestFiles()が最終的な安全網になる。
 const UNLINK_RETRY_LIMIT = 3
 const UNLINK_RETRY_DELAY_MS = 5000
 
-// filePath -> { cleaned, cleaning, maxTimer, servedTimer, retryTimer, onSettled }
-// プロセス内メモリのみで管理するため、プロセス再起動・クラッシュで状態は失われる
-// (その場合の掃除はcleanupOrphanedRequestFiles()が担う)。
 const pending = new Map()
 
 const unref = (timer) => {
@@ -74,8 +63,6 @@ const unref = (timer) => {
   return timer
 }
 
-// entry.cleaning: unlink実行中(retry待機中含む)は、served/max timerが同時発火してrunCleanup()が
-// 二重に呼ばれても何もしない(並行unlinkを防ぐ)。
 const attemptUnlink = (filePath, attempt) => {
   fs.unlink(filePath, (err) => {
     const entry = pending.get(filePath)
@@ -121,8 +108,6 @@ const runCleanup = (filePath) => {
   attemptUnlink(filePath, 1)
 }
 
-// 同じfilePathへ複数回呼ばれても、既存のtimerをclearTimeout()してから登録し直すため、
-// 古いtimerがリークして早期・二重cleanupを起こすことはない。
 const registerForCleanup = (filePath, onSettled) => {
   const existing = pending.get(filePath)
   if (existing) {
@@ -152,9 +137,6 @@ const markServed = (filePath) => {
   entry.servedTimer = unref(setTimeout(() => runCleanup(filePath), GET_GRACE_MS))
 }
 
-// プロセス再起動・クラッシュでcleanup timer(メモリ上のpending)が失われたrequest固有MP3を
-// 起動時に掃除する。十分古いファイルは通常cleanupと同じbounded retry機構に乗せて削除し、
-// まだ新しい(再起動直前に生成された可能性がある)ファイルは即削除せずcleanup管理へ登録するだけにする。
 const cleanupOrphanedRequestFiles = (mp3OutputPath, options = {}, done = () => {}) => {
   const minAgeMs = options.minAgeMs !== undefined ? options.minAgeMs : ORPHAN_MIN_AGE_MS
   const { dir } = splitOutputPath(mp3OutputPath)
@@ -192,6 +174,7 @@ const cleanupOrphanedRequestFiles = (mp3OutputPath, options = {}, done = () => {
           return
         }
         if (Date.now() - stat.mtimeMs < minAgeMs) {
+          // 再起動直前に生成された可能性があるため即削除しない。
           registerForCleanup(filePath)
           finishOne()
           return

@@ -9,8 +9,6 @@ const { createGoogleCastBrowser } = require('./mdns-browser')
 const fs = require('fs')
 const textToSpeech = require('@google-cloud/text-to-speech')
 const { generateRequestId, resolveRequestMp3Path, appendRequestId, registerForCleanup } = require('./request-mp3')
-// Application Default Credentialsで認証する。サービスアカウントJSONを使う場合は
-// 環境変数 GOOGLE_APPLICATION_CREDENTIALS にそのパスを設定する。
 const client = new textToSpeech.TextToSpeechClient()
 
 var audioFilePath
@@ -29,8 +27,6 @@ var setUp = (lang, voice, path) => {
 
 var ip = (ip) => deviceAddress = ip
 
-// IP未指定時のmDNSディスカバリで、発見したデバイス名がここで設定した名前を
-// 含むかどうかの絞り込みに使う(前方一致・完全一致ではなく部分一致)。
 var device = (name) => deviceName = name
 
 var volume = (newVolume) => {
@@ -45,8 +41,7 @@ const notify = (message, callback) => start(message, callback, getSpeechUrl)
 
 const play = (mp3_url, callback) => start(mp3_url, callback, getPlayUrl)
 
-// 呼び出し時点の設定値をここでsnapshotする。後続処理は非同期(mDNS探索やTTS/Cast通信待ち)
-// なので、module共有状態を後で読み直すと、その間の別リクエストのsetUp()等で値が変わりうる。
+// 非同期処理待ちの間に別リクエストがmodule共有状態を書き換えても影響を受けないよう、ここでsnapshotする。
 const start = (target, callback, func) => {
   const settings = {
     vol: volumeLevel,
@@ -57,7 +52,6 @@ const start = (target, callback, func) => {
   }
 
   if (!deviceAddress) {
-    // onUpが同期的に発火してもcurrentBrowser未代入で参照されないよう、宣言と代入を分けている。
     let currentBrowser
     currentBrowser = createGoogleCastBrowser((service) => {
       console.log('Device "%s" at %s:%d', service.name, service.addresses[0], service.port)
@@ -78,9 +72,7 @@ const start = (target, callback, func) => {
   }
 }
 
-// idなし互換用にmp3OutputPath自体も更新する。fs.rename()はatomicなので、読んでいる側が
-// 書きかけの内容を読むことはない。失敗してもログ出力のみでdone()は呼び、後続処理へ進める
-// (doneは「進んでよいタイミング」を伝えるだけで、成否はnotify()のcallbackに影響させない)。
+// mp3OutputPathへはcopy+renameでatomicに反映する(読み手が書きかけの内容を読まない)。失敗してもnotify()自体は継続する。
 const updateLatestMp3 = (requestOutputPath, outputPath, done) => {
   const tmpPath = `${requestOutputPath}.tmp`
   fs.copyFile(requestOutputPath, tmpPath, (err) => {
@@ -132,7 +124,6 @@ const getSpeechUrl = (text, host, settings, callback) => {
         callback('error')
         return
       }
-      // Castが実際にGETしなかった場合の最後の砦。実GET契機のcleanupはmarkServed()(request-mp3.js)が担う。
       registerForCleanup(requestOutputPath)
       updateLatestMp3(requestOutputPath, outputPath, () => {
         onDeviceUp(host, requestPlaybackUrl, vol, (res) => {
@@ -151,7 +142,6 @@ const getPlayUrl = (url, host, settings, callback) =>
 
 const onDeviceUp = (host, url, vol, callback) => {
   const client = new Client()
-  // 'error'イベントとlaunch/loadのコールバックエラーが重複して発火してもcallbackを二重に呼ばない。
   let settled = false
   const finish = (res) => {
     if (settled) return
@@ -160,7 +150,6 @@ const onDeviceUp = (host, url, vol, callback) => {
     callback(res)
   }
 
-  // client.connect()より先に登録する('error'イベントの購読漏れを防ぐ)。
   client.on('error', (err) => {
     console.log('Error: %s', err.message)
     finish('error')
@@ -190,7 +179,7 @@ const onDeviceUp = (host, url, vol, callback) => {
       const media = {
         contentId: url,
         contentType: 'audio/mp3',
-        streamType: 'BUFFERED' // or LIVE
+        streamType: 'BUFFERED'
       }
       player.load(media, { autoplay: true }, (err) => {
         if (err) {

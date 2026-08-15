@@ -8,7 +8,7 @@ const express = require('express')
 
 const urlencodedParser = bodyParser.urlencoded({ extended: false })
 
-// LAN / localhost等の信頼できるネットワークからの利用を前提とし、ngrokへは公開しない。
+// ngrokへは公開しない(LAN / localhost向け)。
 const createNotifyApp = ({ notifyUrl, googleHomeIp, language, voice, mp3OutputPath }) => {
   const app = express()
 
@@ -60,8 +60,6 @@ const createNotifyApp = ({ notifyUrl, googleHomeIp, language, voice, mp3OutputPa
   return app
 }
 
-// Google Home / Castデバイスが生成済みMP3を取得できるよう、このappだけをngrokへ公開する。
-// idはisValidRequestId()で内部生成のhex文字列のみに限定してからパスを組み立て、path traversalを防ぐ。
 const createMp3App = ({ mp3Url, mp3OutputPath }) => {
   const app = express()
 
@@ -73,6 +71,7 @@ const createMp3App = ({ mp3Url, mp3OutputPath }) => {
     let isRequestSpecific = false
 
     if (id !== undefined) {
+      // HTTP由来のidを検証し、path traversalを防ぐ。
       if (!isValidRequestId(id)) {
         res.sendStatus(400)
         return
@@ -133,7 +132,6 @@ const start = () => {
     ngrokAuthtoken
   } = config
 
-  // このファイルは固定1台のデバイスにのみ通知するsample runnerのため、GOOGLE_HOME_IPを必須として検証する。
   const googleHomeIp = requireGoogleHomeIp(config)
 
   const notifyApp = createNotifyApp({ notifyUrl, googleHomeIp, language, voice, mp3OutputPath })

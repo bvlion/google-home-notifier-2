@@ -1,8 +1,5 @@
 'use strict'
 
-// ngrokのauthtokenなどsecretな値はデフォルトを持たせず必須値として扱う。Google HomeのIPは
-// リクエストごとにgooglehome.ip(ip)で切り替える運用を妨げないよう、必須値にはしない。
-
 const DEFAULT_SERVER_PORT = 8091
 const DEFAULT_MP3_SERVER_PORT = 8092
 const MAX_TCP_PORT = 65535
@@ -33,7 +30,6 @@ const resolveTcpPort = (env, name, defaultValue) => {
 
 const resolveServerPort = (env) => resolveTcpPort(env, 'SERVER_PORT', DEFAULT_SERVER_PORT)
 
-// ngrokはこのポートだけをforwardし、通知用serverPortは公開しない。
 const resolveMp3ServerPort = (env) => resolveTcpPort(env, 'MP3_SERVER_PORT', DEFAULT_MP3_SERVER_PORT)
 
 const loadConfig = (env) => {
@@ -57,7 +53,6 @@ const loadConfig = (env) => {
   }
 }
 
-// 固定1台向けsample runner(main.js)専用の検証。共通設定としては必須ではないためloadConfig()には含めない。
 const requireGoogleHomeIp = (config) => {
   if (!config.googleHomeIp) {
     throw new Error('環境変数 GOOGLE_HOME_IP を設定してください(固定1台向けsample runnerのmain.jsを使う場合は必須です。リクエストごとに通知先を切り替えたい場合はscript/以下のカスタムrunnerでgooglehome.ip(ip)を呼び出してください)。')

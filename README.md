@@ -154,7 +154,7 @@ googlehome.notify('こんにちは', (result) => console.log(result))
 
 `main.js` を土台にする場合、次の変更を行ってください。
 
-1. `require('./google-home-notifier-2')` / `require('./config')` を、`script/` から見て1階層上を指すよう `require('../google-home-notifier-2')` / `require('../config')` に変更する
+1. リポジトリ内モジュールへの相対requireを、`script/` から見て1階層上を指すよう変更する（`require('./google-home-notifier-2')` → `require('../google-home-notifier-2')`、`require('./config')` → `require('../config')`、`require('./request-mp3')` → `require('../request-mp3')`）
 2. `requireGoogleHomeIp` のimport（`require('../config')` の分割代入部分）と呼び出し（`const googleHomeIp = requireGoogleHomeIp(config)`）を削除する（custom runnerでは `GOOGLE_HOME_IP` を必須にする必要がないため）
 3. `start()` 内の `createNotifyApp({ notifyUrl, googleHomeIp, language, voice, mp3OutputPath })` から `googleHomeIp` を取り除く（`const googleHomeIp = ...` を削除しただけでは、この参照が未定義変数となり起動時に `ReferenceError` になります）
 4. `createNotifyApp` のrequestハンドラ内で固定IPを渡している `googlehome.ip(googleHomeIp)` を、リクエスト内容に応じて解決したIPに置き換える（例: `googlehome.ip(req.body.ip)` や家庭固有のルーティング条件）。あわせて `createNotifyApp` の引数リストからも不要になった `googleHomeIp` を取り除いて構いません

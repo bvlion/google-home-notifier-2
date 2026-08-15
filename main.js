@@ -8,7 +8,6 @@ const express = require('express')
 
 const urlencodedParser = bodyParser.urlencoded({ extended: false })
 
-// ngrokへは公開しない(LAN / localhost向け)。
 const createNotifyApp = ({ notifyUrl, googleHomeIp, language, voice, mp3OutputPath }) => {
   const app = express()
 
@@ -71,7 +70,6 @@ const createMp3App = ({ mp3Url, mp3OutputPath }) => {
     let isRequestSpecific = false
 
     if (id !== undefined) {
-      // HTTP由来のidを検証し、path traversalを防ぐ。
       if (!isValidRequestId(id)) {
         res.sendStatus(400)
         return

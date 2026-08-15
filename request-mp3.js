@@ -174,7 +174,6 @@ const cleanupOrphanedRequestFiles = (mp3OutputPath, options = {}, done = () => {
           return
         }
         if (Date.now() - stat.mtimeMs < minAgeMs) {
-          // 再起動直前に生成された可能性があるため即削除しない。
           registerForCleanup(filePath)
           finishOne()
           return

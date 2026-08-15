@@ -41,7 +41,7 @@ const notify = (message, callback) => start(message, callback, getSpeechUrl)
 
 const play = (mp3_url, callback) => start(mp3_url, callback, getPlayUrl)
 
-// 非同期処理待ちの間に別リクエストがmodule共有状態を書き換えても影響を受けないよう、ここでsnapshotする。
+// setUp()/volume()/ngrokUrl()で設定される値は、並行通知で上書きされないよう呼び出し時点で固定する。
 const start = (target, callback, func) => {
   const settings = {
     vol: volumeLevel,
@@ -72,7 +72,7 @@ const start = (target, callback, func) => {
   }
 }
 
-// mp3OutputPathへはcopy+renameでatomicに反映する(読み手が書きかけの内容を読まない)。失敗してもnotify()自体は継続する。
+// 互換用mp3OutputPathは書きかけを公開しないよう、一時ファイルへcopyしてからrenameする。失敗してもnotify()自体は継続する。
 const updateLatestMp3 = (requestOutputPath, outputPath, done) => {
   const tmpPath = `${requestOutputPath}.tmp`
   fs.copyFile(requestOutputPath, tmpPath, (err) => {

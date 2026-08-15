@@ -1,6 +1,6 @@
 # google-home-notifier-2
 
-[noelportugal/google-home-notifier](https://github.com/noelportugal/google-home-notifier) をベースに、TTSエンジンを `google-tts-api` から [`@google-cloud/text-to-speech`](https://cloud.google.com/text-to-speech) へ置き換え、現在のNode.js環境向けに保守しているプロジェクトです。Node.jsから Google Home / Google Cast対応デバイスへHTTP経由でテキスト読み上げやMP3再生の通知を送ることができます。
+[noelportugal/google-home-notifier](https://github.com/noelportugal/google-home-notifier) をベースに、TTSエンジンを `google-tts-api` から [`@google-cloud/text-to-speech`](https://cloud.google.com/text-to-speech) へ置き換え、現在のNode.js環境向けに保守しているプロジェクトです。Node.jsからGoogle Home / Google Cast対応デバイスへテキスト読み上げやMP3再生を行えます。
 
 ## Features
 
@@ -39,7 +39,7 @@
 - ngrokアカウントとauthtoken
 - 通知対象のGoogle Home / Google Cast対応デバイスと、実行ホストが同一LAN上で通信できること
 
-Raspberry Piでの実運用実績がありますが、Node.jsが動作する環境であれば特定のハードウェアに限定されません。mDNS探索には [`bonjour-service`](https://www.npmjs.com/package/bonjour-service) というpure JavaScript実装を使用しており、旧`mdns`パッケージのようなネイティブアドオンのビルドや追加OSパッケージは不要です。
+CIではUbuntu上のNode.js 22 / 24を検証しています。また、Raspberry Piでの実運用実績があります。mDNS探索には [`bonjour-service`](https://www.npmjs.com/package/bonjour-service) というpure JavaScript実装を使用しており、旧`mdns`パッケージのような特定ハードウェア専用のネイティブアドオンには依存していません。ただし、上記以外のOS・実行環境全般について一律に動作を保証するものではありません。
 
 ## Quick Start
 
@@ -134,10 +134,15 @@ googlehome.notify('こんにちは', (result) => console.log(result))
 googlehome.play('https://example.com/sound.mp3', (result) => console.log(result))
 ```
 
-IPを指定せずmDNSで探索する場合は、事前に `device()` でデバイス名を設定してください。
+`ip()` を一度も呼び出していない状態であれば、`device()` でデバイス名を設定してmDNS探索させることもできます（`ip()` を呼び出すとそのIPがmodule内に保持され続けるため、`device()` を呼んでもIP指定は解除されません。IP指定とmDNS探索は排他的な設定として使い分けてください）。
 
 ```js
-googlehome.device('Living Room speaker')
+const googlehome = require('./google-home-notifier-2')
+
+googlehome.setUp('ja-JP', 'ja-JP-Standard-A', 'sample.mp3')
+googlehome.ngrokUrl('https://xxxx.ngrok-free.app/text-mp3') // main.js利用時は起動時に自動設定される
+googlehome.device('Living Room speaker') // ip()は呼び出さない
+
 googlehome.notify('こんにちは', (result) => console.log(result))
 ```
 
@@ -150,7 +155,7 @@ googlehome.notify('こんにちは', (result) => console.log(result))
 `main.js` を土台にする場合、変更点は次の3つです。
 
 1. `require('./google-home-notifier-2')` / `require('./config')` を、`script/` から見て1階層上を指すよう `require('../google-home-notifier-2')` / `require('../config')` に変更する
-2. `GOOGLE_HOME_IP` を必須にしている `requireGoogleHomeIp()` の呼び出しを削除する
+2. `requireGoogleHomeIp` のimport（`require('./config')` の分割代入部分）と呼び出しを削除する（custom runnerでは `GOOGLE_HOME_IP` を必須にする必要がないため）
 3. 固定IPを渡している `googlehome.ip(googleHomeIp)` を、リクエスト内容に応じて解決したIPに置き換える（例: `googlehome.ip(req.body.ip)` や家庭固有のルーティング条件）
 
 ```sh
@@ -209,7 +214,6 @@ EnvironmentFile=/path/to/google-home-notifier-2/.env
 ExecStart=/path/to/node /path/to/google-home-notifier-2/main.js
 Restart=on-failure
 RestartSec=10
-KillMode=process
 WorkingDirectory=/path/to/google-home-notifier-2
 
 [Install]

@@ -16,7 +16,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@google-cloud/text-to-speech": "6.4.0",
+    "@google-cloud/text-to-speech": "7.0.0",
     "@ngrok/ngrok": "^1.7.0",
     "body-parser": "^2.2.0",
     "bonjour-service": "^1.4.4",

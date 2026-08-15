@@ -39,7 +39,7 @@
 - ngrokアカウントとauthtoken
 - 通知対象のGoogle Home / Google Cast対応デバイスと、実行ホストが同一LAN上で通信できること
 
-CIではUbuntu上のNode.js 22 / 24を検証しています。また、Raspberry Piでの実運用実績があります。mDNS探索には [`bonjour-service`](https://www.npmjs.com/package/bonjour-service) というpure JavaScript実装を使用しており、旧`mdns`パッケージのような特定ハードウェア専用のネイティブアドオンには依存していません。ただし、上記以外のOS・実行環境全般について一律に動作を保証するものではありません。
+CIではUbuntu上のNode.js 22 / 24を検証しています。また、Raspberry Piでの実運用実績があります。mDNS探索には [`bonjour-service`](https://www.npmjs.com/package/bonjour-service) というpure JavaScript実装を使用しており、旧`mdns`パッケージのようなnative addonや、そのビルドに必要な追加OSパッケージには依存していません。ただし、上記以外のOS・実行環境全般について一律に動作を保証するものではありません。
 
 ## Quick Start
 
@@ -152,15 +152,16 @@ googlehome.notify('こんにちは', (result) => console.log(result))
 
 `main.js` は固定1台のデバイス向けsample runnerです。複数デバイスへの通知先切り替えや、家庭固有のリクエスト処理を行いたい場合は、`script/` ディレクトリ（`.gitignore` で除外済み）に独自のrunnerを作成してください。
 
-`main.js` を土台にする場合、変更点は次の3つです。
+`main.js` を土台にする場合、次の変更を行ってください。
 
 1. `require('./google-home-notifier-2')` / `require('./config')` を、`script/` から見て1階層上を指すよう `require('../google-home-notifier-2')` / `require('../config')` に変更する
-2. `requireGoogleHomeIp` のimport（`require('./config')` の分割代入部分）と呼び出しを削除する（custom runnerでは `GOOGLE_HOME_IP` を必須にする必要がないため）
-3. 固定IPを渡している `googlehome.ip(googleHomeIp)` を、リクエスト内容に応じて解決したIPに置き換える（例: `googlehome.ip(req.body.ip)` や家庭固有のルーティング条件）
+2. `requireGoogleHomeIp` のimport（`require('../config')` の分割代入部分）と呼び出し（`const googleHomeIp = requireGoogleHomeIp(config)`）を削除する（custom runnerでは `GOOGLE_HOME_IP` を必須にする必要がないため）
+3. `start()` 内の `createNotifyApp({ notifyUrl, googleHomeIp, language, voice, mp3OutputPath })` から `googleHomeIp` を取り除く（`const googleHomeIp = ...` を削除しただけでは、この参照が未定義変数となり起動時に `ReferenceError` になります）
+4. `createNotifyApp` のrequestハンドラ内で固定IPを渡している `googlehome.ip(googleHomeIp)` を、リクエスト内容に応じて解決したIPに置き換える（例: `googlehome.ip(req.body.ip)` や家庭固有のルーティング条件）。あわせて `createNotifyApp` の引数リストからも不要になった `googleHomeIp` を取り除いて構いません
 
 ```sh
 $ cp main.js script/main.js
-# 上記3点を編集
+# 上記の変更を反映
 $ node script/main.js
 ```
 

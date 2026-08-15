@@ -9,8 +9,8 @@ const { createGoogleCastBrowser } = require('./mdns-browser')
 const fs = require('fs')
 const textToSpeech = require('@google-cloud/text-to-speech')
 const { generateRequestId, resolveRequestMp3Path, appendRequestId, registerForCleanup } = require('./request-mp3')
-// Google Cloud クライアントライブラリの標準的な認証(Application Default Credentials)を利用する。
-// サービスアカウントJSONを使う場合は環境変数 GOOGLE_APPLICATION_CREDENTIALS にそのパスを設定する。
+// Application Default Credentialsで認証する。サービスアカウントJSONを使う場合は
+// 環境変数 GOOGLE_APPLICATION_CREDENTIALS にそのパスを設定する。
 const client = new textToSpeech.TextToSpeechClient()
 
 var audioFilePath
@@ -29,9 +29,8 @@ var setUp = (lang, voice, path) => {
 
 var ip = (ip) => deviceAddress = ip
 
-// 派生元 noelportugal/google-home-notifier にあった `device(name)` 相当。
 // IP未指定時のmDNSディスカバリで、発見したデバイス名がここで設定した名前を
-// 含むかどうかの絞り込みに使う(deviceName未設定時の挙動は ip() 同様に呼び出し側の責務)。
+// 含むかどうかの絞り込みに使う(前方一致・完全一致ではなく部分一致)。
 var device = (name) => deviceName = name
 
 var volume = (newVolume) => {
@@ -46,11 +45,8 @@ const notify = (message, callback) => start(message, callback, getSpeechUrl)
 
 const play = (mp3_url, callback) => start(mp3_url, callback, getPlayUrl)
 
-// volumeLevel/language/voiceName/audioFilePath/ttsAudioUrlは呼び出し時点の値をここで
-// まとめて捕捉し、以降の処理へ引き回す。IP未指定時はfunc()の実行(getSpeechUrl/getPlayUrl)が
-// serviceUpまで非同期に遅延し、IP指定時もTTS/Cast通信自体が非同期で完了するため、
-// module共有状態を後続処理内で再読込すると、その間に別リクエストがsetUp()/volume()/
-// ngrokUrl()等を呼び出した場合に値が上書きされうる。
+// 呼び出し時点の設定値をここでsnapshotする。後続処理は非同期(mDNS探索やTTS/Cast通信待ち)
+// なので、module共有状態を後で読み直すと、その間の別リクエストのsetUp()等で値が変わりうる。
 const start = (target, callback, func) => {
   const settings = {
     vol: volumeLevel,
@@ -61,20 +57,12 @@ const start = (target, callback, func) => {
   }
 
   if (!deviceAddress) {
-    // createGoogleCastBrowser(onUp)はbonjour-serviceのfind(opts, onUp)を経由し、onUpを探索
-    // 開始より先に登録してから探索を開始する(mdns-browser.js参照)。そのため、ここで
-    // browser.on('up', ...)を後から呼び出す形にはしない(listener登録前に届いたserviceを
-    // 取りこぼすと、その後のbrowser.start()相当は既に開始済みで何もしないno-opになるため)。
-    // onUpがcreateGoogleCastBrowser()の呼び出し中に同期的に発火しても currentBrowser 未代入で
-    // 例外にならないよう、宣言と代入を分けている(実際のbonjour-serviceはUDP応答を待つため
-    // 常に非同期にしか発火しない)。
+    // onUpが同期的に発火してもcurrentBrowser未代入で参照されないよう、宣言と代入を分けている。
     let currentBrowser
     currentBrowser = createGoogleCastBrowser((service) => {
       console.log('Device "%s" at %s:%d', service.name, service.addresses[0], service.port)
       if (service.name.includes(deviceName.replace(' ', '-'))) {
         deviceAddress = service.addresses[0]
-        // 対象デバイスが見つかった場合のみ探索を終了する。対象外デバイスのserviceUpでは
-        // 探索を継続しないと、対象デバイスが後から見つかるケースを取りこぼす。
         if (currentBrowser) {
           currentBrowser.stop()
         }
@@ -90,15 +78,9 @@ const start = (target, callback, func) => {
   }
 }
 
-// idなしでの GET /text-mp3(従来からの利用方法)向けに、request固有MP3の内容を
-// mp3OutputPath自体にも反映する。fs.rename()によるディレクトリエントリの置き換えはatomicなため、
-// mp3OutputPathを読んでいる側が書きかけの内容(破損・空)を読むことはない。複数のnotify()が
-// ほぼ同時に完了した場合、mp3OutputPathの内容がどちらの結果になるかは保証しないが、
-// 内容が破損することはなく、#73が問題にしていた「同一ファイルへの競合書き込み」は発生しない。
-// 元実装がfs.writeFile()完了後にのみCast処理へ進んでいたのと同じ順序を維持するため、
-// copyFile/renameが成功・失敗いずれで終わった場合もdone()を呼んでから後続処理(onDeviceUp)へ
-// 進めるようにする。ここでの失敗はログ出力のみ行い、notify()のcallbackには影響させない
-// (doneはあくまで「後続処理へ進んでよいタイミング」を伝えるだけで、成否は伝えない)。
+// idなし互換用にmp3OutputPath自体も更新する。fs.rename()はatomicなので、読んでいる側が
+// 書きかけの内容を読むことはない。失敗してもログ出力のみでdone()は呼び、後続処理へ進める
+// (doneは「進んでよいタイミング」を伝えるだけで、成否はnotify()のcallbackに影響させない)。
 const updateLatestMp3 = (requestOutputPath, outputPath, done) => {
   const tmpPath = `${requestOutputPath}.tmp`
   fs.copyFile(requestOutputPath, tmpPath, (err) => {
@@ -140,8 +122,6 @@ const getSpeechUrl = (text, host, settings, callback) => {
       return
     }
 
-    // 複数のnotify()が同時に完了しても同一ファイル/同一URLへ書き込み・アクセスが
-    // 競合しないよう、TTSごとに一意なファイルパスと配信URLをここで都度生成する。
     const requestId = generateRequestId()
     const requestOutputPath = resolveRequestMp3Path(outputPath, requestId)
     const requestPlaybackUrl = appendRequestId(playbackUrl, requestId)
@@ -152,11 +132,8 @@ const getSpeechUrl = (text, host, settings, callback) => {
         callback('error')
         return
       }
-      // Castが実際にGETしなかった場合の最後の砦としてのcleanupを予約する。
-      // 実際のGETを契機にしたcleanupはMP3配信用server側でmarkServed()により行われる(request-mp3.js)。
+      // Castが実際にGETしなかった場合の最後の砦。実GET契機のcleanupはmarkServed()(request-mp3.js)が担う。
       registerForCleanup(requestOutputPath)
-      // idなし互換用ファイル(mp3OutputPath)への反映が完了(成功・失敗いずれか)してから
-      // Cast処理へ進む。元実装がfs.writeFile()完了後にのみCast処理へ進んでいた順序を維持するため。
       updateLatestMp3(requestOutputPath, outputPath, () => {
         onDeviceUp(host, requestPlaybackUrl, vol, (res) => {
           callback(res)
@@ -174,8 +151,7 @@ const getPlayUrl = (url, host, settings, callback) =>
 
 const onDeviceUp = (host, url, vol, callback) => {
   const client = new Client()
-  // 成功/エラーいずれの経路でも callback は最大1回だけ呼び出す(client の 'error' イベントと
-  // launch/load のコールバックエラーが重複して発火してもcallbackを二重に呼ばないため)。
+  // 'error'イベントとlaunch/loadのコールバックエラーが重複して発火してもcallbackを二重に呼ばない。
   let settled = false
   const finish = (res) => {
     if (settled) return
@@ -184,8 +160,7 @@ const onDeviceUp = (host, url, vol, callback) => {
     callback(res)
   }
 
-  // client.connect()より先に登録する: connect()呼び出し中に同期的にlaunch/load成功まで
-  // 進む(テストのmock等)場合でも、'error'イベントの購読漏れが起きないようにするため。
+  // client.connect()より先に登録する('error'イベントの購読漏れを防ぐ)。
   client.on('error', (err) => {
     console.log('Error: %s', err.message)
     finish('error')

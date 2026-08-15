@@ -1,9 +1,7 @@
 'use strict'
 
-// main.js が利用する外部設定値(環境変数)を解決する。
-// ngrok の authtoken など secret な値は、実値のデフォルトを持たせず必須値として扱う。
-// Google Home の IP はリクエストごとに googlehome.ip(ip) で切り替える運用を妨げないよう、
-// アプリケーション全体の必須値にはしない(固定1台向けサンプルrunnerでのみ任意に使う)。
+// ngrokのauthtokenなどsecretな値はデフォルトを持たせず必須値として扱う。Google HomeのIPは
+// リクエストごとにgooglehome.ip(ip)で切り替える運用を妨げないよう、必須値にはしない。
 
 const DEFAULT_SERVER_PORT = 8091
 const DEFAULT_MP3_SERVER_PORT = 8092
@@ -35,7 +33,7 @@ const resolveTcpPort = (env, name, defaultValue) => {
 
 const resolveServerPort = (env) => resolveTcpPort(env, 'SERVER_PORT', DEFAULT_SERVER_PORT)
 
-// MP3配信用serverのポート。ngrokはこのポートだけをforwardし、通知用serverPortは公開しない。
+// ngrokはこのポートだけをforwardし、通知用serverPortは公開しない。
 const resolveMp3ServerPort = (env) => resolveTcpPort(env, 'MP3_SERVER_PORT', DEFAULT_MP3_SERVER_PORT)
 
 const loadConfig = (env) => {
@@ -54,17 +52,12 @@ const loadConfig = (env) => {
     mp3Url: env.MP3_URL_PATH || DEFAULT_MP3_URL_PATH,
     notifyUrl: env.NOTIFY_URL_PATH || DEFAULT_NOTIFY_URL_PATH,
     mp3OutputPath: env.MP3_OUTPUT_PATH || DEFAULT_MP3_OUTPUT_PATH,
-    // 固定の1台のみに通知する用途のリポジトリ直下 main.js が任意で使う値。
-    // リクエストごとに googlehome.ip(ip) で通知先を切り替える運用(カスタムrunner)では不要なため、
-    // アプリケーション全体の必須値にはしない。要否は利用側(sample runnerなら requireGoogleHomeIp())で判断する。
     googleHomeIp: env.GOOGLE_HOME_IP || undefined,
     ngrokAuthtoken: requireEnv(env, 'NGROK_AUTHTOKEN')
   }
 }
 
-// 固定1台向けsample runner(リポジトリ直下 main.js)専用の検証。
-// googleHomeIp はライブラリ/共通設定としては必須ではないため loadConfig() には含めず、
-// GOOGLE_HOME_IP を必要とする利用側だけがこの関数で明示的に検証する。
+// 固定1台向けsample runner(main.js)専用の検証。共通設定としては必須ではないためloadConfig()には含めない。
 const requireGoogleHomeIp = (config) => {
   if (!config.googleHomeIp) {
     throw new Error('環境変数 GOOGLE_HOME_IP を設定してください(固定1台向けsample runnerのmain.jsを使う場合は必須です。リクエストごとに通知先を切り替えたい場合はscript/以下のカスタムrunnerでgooglehome.ip(ip)を呼び出してください)。')
